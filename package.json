@@ -1,15 +1,12 @@
 {
   "name": "nexus-term",
   "version": "0.1.0",
-  "description": "Nexus Terminal — SSH/SFTP client with cosmic UI",
-  "author": "Nexus",
+  "description": "Maxter — portable SSH/SFTP client for Windows",
+  "author": "Maxter",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win --x64",
-    "dist:win:portable": "electron-builder --win portable --x64",
-    "dist:win:nsis": "electron-builder --win nsis --x64",
-    "dist:win:zip": "electron-builder --win zip --x64"
+    "dist:win": "electron-builder --win portable --x64"
   },
   "dependencies": {
     "ssh2": "^1.15.0"
@@ -19,8 +16,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.nexus.term",
-    "productName": "Nexus Terminal",
+    "appId": "com.maxter.term",
+    "productName": "Maxter",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -36,26 +33,18 @@
       "!dist/**",
       "!build/**",
       "!.git/**",
-      "!.gitignore"
+      "!.gitignore",
+      "!scripts/**"
     ],
     "win": {
       "target": [
-        { "target": "zip", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] },
-        { "target": "nsis", "arch": ["x64"] }
+        { "target": "portable", "arch": ["x64"] }
       ],
-      "artifactName": "NexusTerminal-${version}-${arch}.${ext}",
-      "executableName": "NexusTerminal"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false,
-      "shortcutName": "Nexus Terminal"
+      "artifactName": "Maxter-${version}-portable.${ext}",
+      "executableName": "Maxter"
     },
     "portable": {
-      "artifactName": "NexusTerminal-${version}-portable.${ext}"
+      "artifactName": "Maxter-${version}-portable.${ext}"
     }
   }
 }

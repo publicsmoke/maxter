@@ -1,11 +1,48 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { Client } = require('ssh2');
+
+// Portable mode: electron-builder's "portable" target sets
+// PORTABLE_EXECUTABLE_DIR to the folder that holds the .exe. When running
+// portable we drop all state into a "Maxter data" folder next to the binary,
+// so the user can move the exe + folder together (to a flash drive, etc).
+// Otherwise (dev run via `npm start`, packaged non-portable build) fall back
+// to the canonical appData location.
+try {
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    const portableData = path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'Maxter data');
+    app.setPath('userData', portableData);
+  } else {
+    app.setPath('userData', path.join(app.getPath('appData'), 'nexus-term'));
+  }
+} catch (e) { /* ignore — fall back to default */ }
+
+// Migrate data that may have been written to a stray "Maxter" userData dir
+// (from an earlier build that mistakenly called app.setName). One-shot,
+// safe to run every launch.
+function migrateStrayMaxterData() {
+  try {
+    const base = app.getPath('appData');
+    const canonical = path.join(base, 'nexus-term');
+    const stray = path.join(base, 'Maxter');
+    if (!fs.existsSync(stray)) return;
+    fs.mkdirSync(canonical, { recursive: true });
+    for (const f of ['servers.json', 'auth.json']) {
+      const src = path.join(stray, f);
+      const dst = path.join(canonical, f);
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        fs.copyFileSync(src, dst);
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
 
 const CONFIG_DIR = () => app.getPath('userData');
 const CONFIG_FILE = () => path.join(CONFIG_DIR(), 'servers.json');
+const AUTH_FILE = () => path.join(CONFIG_DIR(), 'auth.json');
 
 let mainWindow;
 const sessions = new Map(); // sessionId -> { conn, stream, sftp }
@@ -28,7 +65,10 @@ function createWindow() {
   mainWindow.loadFile('index.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  migrateStrayMaxterData();
+  createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -92,6 +132,56 @@ function saveServers(servers) {
 
 ipcMain.handle('servers:list', () => loadServers());
 ipcMain.handle('servers:save', (_e, servers) => { saveServers(servers); return true; });
+
+// --- Auth / PIN ---
+
+let authVerified = false;
+
+function loadAuth() {
+  try {
+    if (!fs.existsSync(AUTH_FILE())) return null;
+    return JSON.parse(fs.readFileSync(AUTH_FILE(), 'utf-8'));
+  } catch (e) { return null; }
+}
+
+function saveAuth(data) {
+  fs.mkdirSync(CONFIG_DIR(), { recursive: true });
+  fs.writeFileSync(AUTH_FILE(), JSON.stringify(data));
+}
+
+function hashPin(pin, salt, iterations) {
+  return crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex');
+}
+
+ipcMain.handle('auth:status', () => {
+  const a = loadAuth();
+  return { hasPin: !!(a && a.pinHash), verified: authVerified };
+});
+
+ipcMain.handle('auth:setPin', (_e, { pin }) => {
+  if (!pin || pin.length < 4) throw new Error('PIN must be at least 4 digits');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const iterations = 120000;
+  const pinHash = hashPin(pin, salt, iterations);
+  saveAuth({ pinHash, salt, iterations, createdAt: Date.now() });
+  authVerified = true;
+  return true;
+});
+
+ipcMain.handle('auth:verify', (_e, { pin }) => {
+  const a = loadAuth();
+  if (!a) return false;
+  const h = hashPin(pin, a.salt, a.iterations || 120000);
+  const ok = crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(a.pinHash, 'hex'));
+  if (ok) authVerified = true;
+  return ok;
+});
+
+ipcMain.handle('auth:reset', () => {
+  try { fs.unlinkSync(AUTH_FILE()); } catch (e) {}
+  authVerified = false;
+  return true;
+});
 
 // --- SSH session ---
 
@@ -279,6 +369,17 @@ ipcMain.handle('sftp:upload', async (_e, { sessionId, remoteDir }) => {
     uploaded.push(path.basename(file));
   }
   return { ok: true, files: uploaded };
+});
+
+ipcMain.handle('dock:setIcon', (_e, dataUrl) => {
+  if (process.platform !== 'darwin' || !app.dock) return false;
+  try {
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (!img.isEmpty()) app.dock.setIcon(img);
+    return true;
+  } catch (e) {
+    return false;
+  }
 });
 
 ipcMain.handle('dialog:pickKey', async () => {
