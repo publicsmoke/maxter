@@ -7,7 +7,7 @@ let activeTabId = null;
 let editingId = null;
 let authMode = 'password';
 let homeDir = '/';
-let currentTheme = 'obsidian';
+let currentTheme = 'solar';
 
 // Double-click tracker lives at module scope so it survives
 // renderServerList() rebuilding the sidebar between the two clicks.
@@ -334,7 +334,7 @@ const FONTS = [
   { id: 'tekno',    name: 'TEKNO',    display: "'Chakra Petch', 'Rajdhani', sans-serif",      mono: "'Fira Code', 'Menlo', monospace" },
 ];
 
-let currentFont = 'ops';
+let currentFont = 'cyber';
 
 function firstFamilyName(s) {
   const m = s && s.match(/['"]([^'"]+)['"]/);
