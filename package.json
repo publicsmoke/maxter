@@ -4,7 +4,9 @@
   "description": "Nexus Term — SSH/SFTP client with Starcraft-inspired cosmic UI",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "postinstall": "node scripts/brand-electron.js",
+    "brand": "node scripts/brand-electron.js"
   },
   "dependencies": {
     "ssh2": "^1.15.0"
