@@ -603,7 +603,7 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   display: flex; align-items: center; gap: 10px;
   padding: 13px 18px 13px;
   background: transparent;
-  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
   cursor: pointer;
   font-size: 11px;
   letter-spacing: 1px;
@@ -612,6 +612,10 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   transition: background 0.12s, color 0.12s;
   position: relative;
   color: var(--text-3);
+}
+/* Close the right edge of the last tab — cleaner than a dangling open side */
+.tab:last-of-type {
+  border-right: 1px solid var(--line);
 }
 .tab:hover {
   background: var(--hover);
