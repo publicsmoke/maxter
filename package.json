@@ -1,15 +1,61 @@
 {
   "name": "nexus-term",
   "version": "0.1.0",
-  "description": "Nexus Term — SSH/SFTP client with Starcraft-inspired cosmic UI",
+  "description": "Nexus Terminal — SSH/SFTP client with cosmic UI",
+  "author": "Nexus",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist:win": "electron-builder --win --x64",
+    "dist:win:portable": "electron-builder --win portable --x64",
+    "dist:win:nsis": "electron-builder --win nsis --x64",
+    "dist:win:zip": "electron-builder --win zip --x64"
   },
   "dependencies": {
     "ssh2": "^1.15.0"
   },
   "devDependencies": {
-    "electron": "^31.3.0"
+    "electron": "^31.3.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.nexus.term",
+    "productName": "Nexus Terminal",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app.js",
+      "index.html",
+      "styles.css",
+      "package.json",
+      "!**/*.md",
+      "!dist/**",
+      "!build/**",
+      "!.git/**",
+      "!.gitignore"
+    ],
+    "win": {
+      "target": [
+        { "target": "zip", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "artifactName": "NexusTerminal-${version}-${arch}.${ext}",
+      "executableName": "NexusTerminal"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Nexus Terminal"
+    },
+    "portable": {
+      "artifactName": "NexusTerminal-${version}-portable.${ext}"
+    }
   }
 }
