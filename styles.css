@@ -620,24 +620,14 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
 .tab.active {
   background: var(--bg-1);
   color: var(--text);
-  border-left: 1px solid var(--line);
 }
-/* Top accent stripe */
+/* Sharp top accent bar — no glow, clean industrial look */
 .tab.active::before {
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 2px;
   background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
-}
-/* Hide the tabs-bar bottom line under the active tab, so it "opens" into the content */
-.tab.active::after {
-  content: '';
-  position: absolute;
-  bottom: -1px; left: 0; right: 0;
-  height: 1px;
-  background: var(--bg-1);
 }
 .tab-seq {
   font-family: var(--family-mono);
@@ -1371,25 +1361,25 @@ body.theme-solar {
   --surface-2: rgba(238,232,213,0.7);
   --surface-3: rgba(238,232,213,0.4);
   --overlay: rgba(88,110,117,0.55);
-  --hover: rgba(101,123,131,0.08);
+  --hover: rgba(203,75,22,0.08);
   --line: rgba(101,123,131,0.22);
   --line-2: rgba(101,123,131,0.38);
-  --line-3: rgba(101,123,131,0.6);
-  --text: #002b36;
+  --line-3: rgba(203,75,22,0.55);
+  --text: #3a2a1a;
   --text-2: #586e75;
   --text-3: #93a1a1;
   --text-4: #b5b5a3;
-  --accent: #268bd2;
-  --accent-hot: #2aa198;
+  --accent: #cb4b16;
+  --accent-hot: #b58900;
   --ok: #859900;
   --warn: #b58900;
   --alert: #dc322f;
   --backdrop:
-    radial-gradient(ellipse at 15% 8%, rgba(38,139,210,0.06) 0, transparent 55%),
-    radial-gradient(ellipse at 85% 92%, rgba(42,161,152,0.04) 0, transparent 55%),
+    radial-gradient(ellipse at 15% 8%, rgba(203,75,22,0.07) 0, transparent 55%),
+    radial-gradient(ellipse at 85% 92%, rgba(181,137,0,0.05) 0, transparent 55%),
     linear-gradient(180deg, #fdf6e3 0%, #faf2dd 50%, #f5eed2 100%);
-  --star-color: #268bd2;
-  --star-opacity: 0.1;
+  --star-color: #cb4b16;
+  --star-opacity: 0.12;
 }
 
 /* VOID · pure monochrome minimal */

@@ -9,6 +9,11 @@ let authMode = 'password';
 let homeDir = '/';
 let currentTheme = 'obsidian';
 
+// Double-click tracker lives at module scope so it survives
+// renderServerList() rebuilding the sidebar between the two clicks.
+// Keyed by server.id.
+const _lastSrvClick = new Map();
+
 // ─── Themes ───
 const THEMES = [
   {
@@ -86,13 +91,13 @@ const THEMES = [
   {
     id: 'solar', name: 'SOLAR',
     xterm: {
-      background: '#fdf6e3', foreground: '#002b36',
-      cursor: '#268bd2', cursorAccent: '#fdf6e3',
+      background: '#fdf6e3', foreground: '#3a2a1a',
+      cursor: '#cb4b16', cursorAccent: '#fdf6e3',
       selectionBackground: '#eee8d5',
       black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
       blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
       brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#93a1a1', brightYellow: '#657b83',
-      brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#fdf6e3',
+      brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#3a2a1a',
     },
   },
   {
@@ -481,11 +486,13 @@ function renderServerList() {
     });
     // Single click → switch to / revive / create one session per server.
     // Double click (<320ms between clicks) → force a new parallel session.
-    let lastClickAt = 0;
+    // Use the module-level tracker so the timer survives sidebar re-renders
+    // triggered by the first click (e.g. online state flip).
     el.addEventListener('click', () => {
       const now = Date.now();
-      const isDouble = now - lastClickAt < 320;
-      lastClickAt = isDouble ? 0 : now;
+      const prev = _lastSrvClick.get(s.id) || 0;
+      const isDouble = now - prev < 320;
+      _lastSrvClick.set(s.id, isDouble ? 0 : now);
       connectServer(s, { allowDuplicate: isDouble });
     });
     list.appendChild(el);
@@ -493,9 +500,12 @@ function renderServerList() {
 }
 
 function updateStats() {
-  $('#statServers').textContent = servers.length;
-  $('#statActive').textContent = activeSessions.size;
-  $('#srvCount').textContent = pad2(servers.length);
+  const srv = $('#statServers');
+  if (srv) srv.textContent = servers.length;
+  const act = $('#statActive');
+  if (act) act.textContent = activeSessions.size;
+  const cnt = $('#srvCount');
+  if (cnt) cnt.textContent = pad2(servers.length);
 }
 
 // ─── Modal ───
@@ -1410,39 +1420,29 @@ async function makeDockIconDataURL() {
       ctx.fillRect(0, 0, size, size);
     }
 
-    // Inner hairline frame
-    const inset = size * 0.095;
-    ctx.strokeStyle = 'rgba(156,179,212,0.16)';
-    ctx.lineWidth = Math.max(1, size * 0.003);
-    if (ctx.roundRect) {
-      ctx.beginPath();
-      ctx.roundRect(inset, inset, size - inset * 2, size - inset * 2, radius * 0.65);
-      ctx.stroke();
-    }
-
-    // Corner ticks (signature brand detail from the UI)
+    // Inner square accent frame — hugs the letter
+    const frameInset = size * 0.11;
+    const frameSize = size - frameInset * 2;
     ctx.strokeStyle = '#6695c4';
-    ctx.lineWidth = Math.max(2, size * 0.007);
+    ctx.lineWidth = Math.max(2, size * 0.009);
     ctx.lineCap = 'square';
-    const tickLen = size * 0.04;
-    const t = inset;
-    // TL
-    ctx.beginPath(); ctx.moveTo(t, t + tickLen); ctx.lineTo(t, t); ctx.lineTo(t + tickLen, t); ctx.stroke();
-    // TR
-    ctx.beginPath(); ctx.moveTo(size - t - tickLen, t); ctx.lineTo(size - t, t); ctx.lineTo(size - t, t + tickLen); ctx.stroke();
-    // BL
-    ctx.beginPath(); ctx.moveTo(t, size - t - tickLen); ctx.lineTo(t, size - t); ctx.lineTo(t + tickLen, size - t); ctx.stroke();
-    // BR
-    ctx.beginPath(); ctx.moveTo(size - t - tickLen, size - t); ctx.lineTo(size - t, size - t); ctx.lineTo(size - t, size - t - tickLen); ctx.stroke();
+    ctx.strokeRect(frameInset, frameInset, frameSize, frameSize);
 
-    // Letter M — Rajdhani Black, accent-hot colour, soft glow
-    ctx.font = `900 ${Math.round(size * 0.6)}px "Rajdhani", "Inter", sans-serif`;
+    // Letter M — Rajdhani Black, optically centered in the frame
+    ctx.font = `900 ${Math.round(size * 0.72)}px "Rajdhani", "Inter", sans-serif`;
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#d4e2f2';
     ctx.shadowColor = 'rgba(102,149,196,0.55)';
-    ctx.shadowBlur = size * 0.05;
-    ctx.fillStyle = '#c0d3ea';
-    ctx.fillText('M', size / 2, size / 2 + size * 0.02);
+    ctx.shadowBlur = size * 0.035;
+    // Measure actual glyph bounds and place baseline so the glyph's visual
+    // center lines up exactly with the frame's geometric center.
+    const metrics = ctx.measureText('M');
+    const ascent = metrics.actualBoundingBoxAscent || size * 0.5;
+    const descent = metrics.actualBoundingBoxDescent || 0;
+    const frameCenterY = frameInset + frameSize / 2;
+    const baselineY = frameCenterY + (ascent - descent) / 2;
+    ctx.fillText('M', size / 2, baselineY);
     ctx.shadowBlur = 0;
 
     return canvas.toDataURL('image/png');
@@ -1473,10 +1473,9 @@ async function makeDockIconDataURL() {
   } catch (e) {}
   applyFont(currentFont);
 
-  // Sidebar state
-  let sidebarHidden = false;
-  try { sidebarHidden = localStorage.getItem('maxter.sidebar.hidden') === '1'; } catch (e) {}
-  setSidebarHidden(sidebarHidden);
+  // Sidebar: always start visible on launch. The toggle is a workspace tool,
+  // not a persisted preference — user opens the app → sees their registry.
+  setSidebarHidden(false);
 
   let pickerOpen = false;
   try { pickerOpen = localStorage.getItem('nexus.theme.open') === '1'; } catch (e) {}
