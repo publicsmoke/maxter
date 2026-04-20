@@ -453,6 +453,100 @@ function toast(msg, kind = '') {
 }
 function pad2(n) { return String(n).padStart(2, '0'); }
 
+// ─── Custom confirm / prompt (replaces native browser dialogs) ───
+let _dialogResolve = null;
+
+function openDialog(opts) {
+  return new Promise(resolve => {
+    const m = $('#dialogModal');
+    const title = $('#dialogTitle');
+    const msg = $('#dialogMsg');
+    const inputWrap = $('#dialogInputWrap');
+    const input = $('#dialogInput');
+    const btnOk = $('#dialogOk');
+    const btnCancel = $('#dialogCancel');
+
+    title.textContent = opts.title || 'CONFIRM';
+    msg.textContent = opts.message || '';
+    btnOk.textContent = opts.okText || (opts.prompt ? 'OK' : 'CONFIRM');
+    btnCancel.textContent = opts.cancelText || 'CANCEL';
+    btnOk.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
+
+    if (opts.prompt) {
+      inputWrap.hidden = false;
+      input.value = opts.defaultValue || '';
+      setTimeout(() => { input.focus(); input.select(); }, 40);
+    } else {
+      inputWrap.hidden = true;
+      setTimeout(() => btnOk.focus(), 40);
+    }
+
+    _dialogResolve = resolve;
+    m.hidden = false;
+  });
+}
+
+function closeDialog(result) {
+  const m = $('#dialogModal');
+  if (m) m.hidden = true;
+  const r = _dialogResolve;
+  _dialogResolve = null;
+  if (r) r(result);
+}
+
+function showConfirm(message, opts = {}) {
+  return openDialog({
+    title: opts.title || 'CONFIRM',
+    message,
+    danger: opts.danger !== false,
+    okText: opts.okText || 'CONFIRM',
+    cancelText: opts.cancelText,
+  });
+}
+
+function showPrompt(message, defaultValue = '', opts = {}) {
+  return openDialog({
+    title: opts.title || 'INPUT',
+    message,
+    prompt: true,
+    defaultValue,
+    okText: opts.okText || 'OK',
+    cancelText: opts.cancelText,
+  });
+}
+
+// Wire dialog actions
+(function wireDialog() {
+  const m = $('#dialogModal');
+  if (!m) return;
+  const btnCancel = $('#dialogCancel');
+  const btnOk = $('#dialogOk');
+  const input = $('#dialogInput');
+  const inputWrap = $('#dialogInputWrap');
+
+  function onCancel() {
+    const isPrompt = !inputWrap.hidden;
+    closeDialog(isPrompt ? null : false);
+  }
+  function onOk() {
+    const isPrompt = !inputWrap.hidden;
+    closeDialog(isPrompt ? input.value : true);
+  }
+
+  btnCancel.addEventListener('click', onCancel);
+  btnOk.addEventListener('click', onOk);
+  m.addEventListener('click', e => { if (e.target.id === 'dialogModal') onCancel(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+    else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+  });
+  m.addEventListener('keydown', e => {
+    if (e.target === input) return;
+    if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+    else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+  });
+})();
+
 // ─── Server registry ───
 async function loadServers() {
   servers = await window.api.servers.list();
@@ -608,7 +702,10 @@ $('#btnSave').addEventListener('click', async () => {
 
 $('#btnDel').addEventListener('click', async () => {
   if (!editingId) return;
-  if (!confirm('Decommission this endpoint permanently?')) return;
+  const ok = await showConfirm('Decommission this endpoint permanently?', {
+    title: 'DECOMMISSION ENDPOINT', okText: 'DECOMMISSION', danger: true,
+  });
+  if (!ok) return;
   servers = servers.filter(s => s.id !== editingId);
   await window.api.servers.save(servers);
   $('#modal').hidden = true;
@@ -998,7 +1095,9 @@ function bindPaneBar(sessionId, paneEl, side) {
       } else if (act === 'refresh') {
         load(sessionId);
       } else if (act === 'mkdir') {
-        const name = prompt('New directory name:');
+        const name = await showPrompt('New directory name:', '', {
+          title: 'NEW DIRECTORY', okText: 'CREATE',
+        });
         if (!name) return;
         const target = joinPath(sess[curKey], name);
         try {
@@ -1102,7 +1201,9 @@ function renderFileList(sessionId, side, items, listEl) {
         if (act === 'xfer') {
           await handleTransfer(sessionId, side, item, b);
         } else if (act === 'rn') {
-          const nn = prompt('Rename to:', item.name);
+          const nn = await showPrompt('Rename to:', item.name, {
+            title: 'RENAME', okText: 'RENAME',
+          });
           if (!nn || nn === item.name) return;
           const from = joinPath(sess[curKey], item.name);
           const to = joinPath(sess[curKey], nn);
@@ -1114,7 +1215,11 @@ function renderFileList(sessionId, side, items, listEl) {
           } catch (e) { toast(e.message, 'err'); }
         } else if (act === 'rm') {
           const target = joinPath(sess[curKey], item.name);
-          if (!confirm('Delete ' + item.name + (item.isDir ? ' (recursive)' : '') + '?')) return;
+          const ok = await showConfirm(
+            'Delete ' + item.name + (item.isDir ? ' (recursive)' : '') + '?',
+            { title: 'DELETE', okText: 'DELETE', danger: true }
+          );
+          if (!ok) return;
           try {
             if (side === 'local') await window.api.local.delete({ path: target, isDir: item.isDir });
             else await window.api.sftp.delete({ sessionId, path: target, isDir: item.isDir });
