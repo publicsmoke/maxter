@@ -1138,6 +1138,43 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   border-top: 1px solid var(--line);
 }
 
+/* ─── Custom confirm / prompt dialog ─── */
+#dialogModal { z-index: 150; }
+.dialog-body {
+  width: 460px;
+  max-width: 92vw;
+}
+.dialog-msg {
+  font-family: var(--family-mono);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dialog-input-wrap {
+  margin-bottom: 20px;
+}
+.dialog-input-wrap[hidden] { display: none; }
+.dialog-input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 10px 12px;
+  font-family: var(--family-mono);
+  font-size: 13px;
+  letter-spacing: 0.3px;
+  border-radius: 0;
+  transition: border-color 0.12s;
+}
+.dialog-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ─── Toasts ─── */
 .toast-host {
   position: fixed;
