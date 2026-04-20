@@ -190,6 +190,26 @@
     </div>
   </div>
 
+  <!-- Confirm / Prompt dialog (replaces native confirm/prompt) -->
+  <div class="modal" id="dialogModal" hidden>
+    <div class="modal-body dialog-body">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+      <div class="modal-header" id="dialogTitle">CONFIRM</div>
+      <div class="dialog-msg" id="dialogMsg"></div>
+      <div class="dialog-input-wrap" id="dialogInputWrap" hidden>
+        <input class="dialog-input" id="dialogInput" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" id="dialogCancel">CANCEL</button>
+        <button class="btn btn-primary" id="dialogOk">OK</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Lockscreen (PIN) -->
   <div class="lockscreen" id="lockscreen" hidden>
     <div class="lock-body">
