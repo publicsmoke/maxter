@@ -4,33 +4,37 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
     content="default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:;">
-  <title>NEXUS TERMINAL</title>
+  <title>MAXTER</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Rajdhani:wght@400;500;600;700&family=VT323&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Black+Ops+One&family=Bungee&family=Chakra+Petch:wght@400;600;700&family=Exo+2:wght@400;600;700&family=Fira+Code:wght@400;500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Iceberg&family=Inconsolata:wght@400;500&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Major+Mono+Display&family=Michroma&family=Monoton&family=Orbitron:wght@400;600;900&family=Press+Start+2P&family=Rajdhani:wght@400;500;600;700&family=Righteous&family=Russo+One&family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Syncopate:wght@400;700&family=Teko:wght@400;500;600;700&family=Unica+One&family=VT323&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
+
+  <!-- SVG symbols for the "M" mark (reused in sidebar, splash, lockscreen) -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <!-- Clean filled "M" with sharp peaks -->
+    <symbol id="mx-mark" viewBox="0 0 48 48">
+      <path d="M6 42 V6 H15 L24 20 L33 6 H42 V42 H34 V18 L26 30 H22 L14 18 V42 Z" fill="currentColor"/>
+    </symbol>
+    <!-- "M" with a diagonal accent slash, used on the logo frame -->
+    <symbol id="mx-mark-accent" viewBox="0 0 48 48">
+      <path d="M6 42 V6 H15 L24 20 L33 6 H42 V42 H34 V18 L26 30 H22 L14 18 V42 Z" fill="currentColor"/>
+      <path d="M38 8 L 44 2 L 46 4 L 40 10 Z" fill="currentColor" opacity="0.55"/>
+    </symbol>
+  </svg>
 </head>
 <body>
   <div id="stars"></div>
 
   <div class="app">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="logo">
-        <div class="logo-mark">
-          <span class="corner tl"></span>
-          <span class="corner tr"></span>
-          <span class="corner bl"></span>
-          <span class="corner br"></span>
-          <span class="lm-text">N</span>
-        </div>
-        <div class="logo-text">
-          <div class="logo-title">NEXUS</div>
-          <div class="logo-sub">TERMINAL / v0.1</div>
-        </div>
+        <div class="wordmark">MAXTER</div>
+        <div class="logo-sub">CONTROL · v0.1</div>
       </div>
 
-      <button class="btn btn-accent btn-block btn-add" id="btnAdd">
+      <button class="btn btn-block btn-add" id="btnAdd">
         <span class="plus">+</span> ADD ENDPOINT
       </button>
 
@@ -42,13 +46,7 @@
       <div id="serverList" class="server-list"></div>
 
       <div class="status-block">
-        <div class="status-row">
-          <span>SYSTEM</span>
-          <span class="val" id="sysLabel">NOMINAL</span>
-        </div>
-        <div class="status-bar"><div class="status-bar-fill" id="sysBar" style="width: 100%"></div></div>
-
-        <div class="status-row mt theme-toggle" id="themeToggle" role="button" tabindex="0">
+        <div class="status-row theme-toggle" id="themeToggle" role="button" tabindex="0">
           <span>THEME</span>
           <span class="theme-end">
             <span class="val" id="themeLabel">OBSIDIAN</span>
@@ -64,12 +62,59 @@
           <button class="theme-dot" data-theme="nord" style="--swatch: #88c0d0" title="Nord"></button>
           <button class="theme-dot" data-theme="solar" style="--swatch: #268bd2" title="Solar"></button>
           <button class="theme-dot" data-theme="void" style="--swatch: #ffffff" title="Void"></button>
+          <button class="theme-dot" data-theme="dracula" style="--swatch: #ff79c6" title="Dracula"></button>
+          <button class="theme-dot" data-theme="tokyo" style="--swatch: #7aa2f7" title="Tokyo Night"></button>
+          <button class="theme-dot" data-theme="synthwave" style="--swatch: #ff00c8" title="Synthwave"></button>
+          <button class="theme-dot" data-theme="amber" style="--swatch: #ffb000" title="Amber CRT"></button>
+          <button class="theme-dot" data-theme="monokai" style="--swatch: #f92672" title="Monokai"></button>
+          <button class="theme-dot" data-theme="gruvbox" style="--swatch: #fe8019" title="Gruvbox"></button>
+          <button class="theme-dot" data-theme="catppuccin" style="--swatch: #f5c2e7" title="Catppuccin"></button>
+          <button class="theme-dot" data-theme="terminator" style="--swatch: #ff0000" title="Terminator"></button>
+          <button class="theme-dot" data-theme="ocean" style="--swatch: #4a9eff" title="Ocean"></button>
+          <button class="theme-dot" data-theme="sunset" style="--swatch: #ff6b9d" title="Sunset"></button>
+          <button class="theme-dot" data-theme="carbon" style="--swatch: #0f62fe" title="Carbon"></button>
+          <button class="theme-dot" data-theme="paper" style="--swatch: #1a1a1a" title="Paper"></button>
+          <button class="theme-dot" data-theme="linear" style="--swatch: #5e6ad2" title="Linear"></button>
+          <button class="theme-dot" data-theme="gruvlight" style="--swatch: #af3a03" title="Gruvbox Light"></button>
+          <button class="theme-dot" data-theme="sakura" style="--swatch: #e85d75" title="Sakura"></button>
+          <button class="theme-dot" data-theme="mint" style="--swatch: #10b981" title="Mint"></button>
+        </div>
+
+        <div class="status-row mt theme-toggle" id="fontToggle" role="button" tabindex="0">
+          <span>FONT</span>
+          <span class="theme-end">
+            <span class="val" id="fontLabel">OPS</span>
+            <span class="chev">▸</span>
+          </span>
+        </div>
+        <div class="font-dots" id="fontDots" hidden>
+          <button class="font-btn" data-font="ops"      style="font-family:'Rajdhani',sans-serif;font-weight:700">OPS</button>
+          <button class="font-btn" data-font="protoss"  style="font-family:'Orbitron',sans-serif;font-weight:700">PROT</button>
+          <button class="font-btn" data-font="vapor"    style="font-family:'Audiowide',sans-serif">VAPOR</button>
+          <button class="font-btn" data-font="crt"      style="font-family:'VT323',monospace;font-size:16px">CRT</button>
+          <button class="font-btn" data-font="arcade"   style="font-family:'Press Start 2P',monospace;font-size:8px">8BIT</button>
+          <button class="font-btn" data-font="block"    style="font-family:'Bungee',sans-serif">BLK</button>
+          <button class="font-btn" data-font="sprint"   style="font-family:'Teko',sans-serif;font-weight:600;font-size:14px">SPD</button>
+          <button class="font-btn" data-font="russo"    style="font-family:'Russo One',sans-serif">RUSSO</button>
+          <button class="font-btn" data-font="ghost"    style="font-family:'Monoton',sans-serif">GHST</button>
+          <button class="font-btn" data-font="cyber"    style="font-family:'Chakra Petch',sans-serif;font-weight:600">CYBR</button>
+          <button class="font-btn" data-font="bauhaus"  style="font-family:'Unica One',sans-serif">BAUS</button>
+          <button class="font-btn" data-font="military" style="font-family:'Black Ops One',sans-serif;font-size:11px">MIL</button>
+          <button class="font-btn" data-font="geo"      style="font-family:'Syncopate',sans-serif;font-weight:700;font-size:10px">GEO</button>
+          <button class="font-btn" data-font="wide"     style="font-family:'Michroma',sans-serif;font-size:9px">WIDE</button>
+          <button class="font-btn" data-font="future"   style="font-family:'Exo 2',sans-serif;font-weight:700">FUTR</button>
+          <button class="font-btn" data-font="ibm"      style="font-family:'IBM Plex Sans',sans-serif;font-weight:600">IBM</button>
+          <button class="font-btn" data-font="iceberg"  style="font-family:'Iceberg',sans-serif">ICE</button>
+          <button class="font-btn" data-font="rite"     style="font-family:'Righteous',sans-serif">RITE</button>
+          <button class="font-btn" data-font="major"    style="font-family:'Major Mono Display',monospace;font-size:11px">MAJR</button>
+          <button class="font-btn" data-font="tekno"    style="font-family:'Chakra Petch',sans-serif;font-weight:700;letter-spacing:0">TEKNO</button>
         </div>
       </div>
     </aside>
 
     <main class="main">
       <div class="tabs-bar" id="tabsBar">
+        <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">«</button>
         <div class="tab-placeholder">NO ACTIVE SESSIONS</div>
       </div>
       <div class="workspace" id="workspace">
@@ -79,13 +124,13 @@
             <span class="corner tr"></span>
             <span class="corner bl"></span>
             <span class="corner br"></span>
-            <span class="sm-text">N</span>
+            <svg class="sm-svg"><use href="#mx-mark"/></svg>
           </div>
-          <div class="splash-title">NEXUS TERMINAL</div>
+          <div class="splash-title">MAXTER</div>
           <div class="splash-sub">SSH / SFTP CONTROL // BUILD 0.1</div>
           <div class="splash-rule"></div>
           <div class="splash-msg">NO ACTIVE SESSIONS</div>
-          <div class="splash-hint">SELECT AN ENDPOINT FROM THE FLEET REGISTRY · CMD+N ADD NEW · CMD+W DISCONNECT</div>
+          <div class="splash-hint">SELECT AN ENDPOINT FROM THE FLEET REGISTRY · CMD+N ADD NEW · CMD+W DISCONNECT · CMD+B TOGGLE SIDEBAR</div>
 
           <div class="splash-stats">
             <div class="stat">
@@ -106,7 +151,7 @@
     </main>
   </div>
 
-  <!-- Modal -->
+  <!-- Endpoint modal -->
   <div class="modal" id="modal" hidden>
     <div class="modal-body">
       <span class="corner tl"></span>
@@ -128,7 +173,12 @@
           <button class="seg" data-auth="key">KEY FILE</button>
         </div>
         <div id="auth-password">
-          <label>ACCESS CODE <input id="f-pass" type="password" autocomplete="new-password"></label>
+          <label>ACCESS CODE
+            <div class="pwd-wrap">
+              <input id="f-pass" type="password" autocomplete="new-password">
+              <button type="button" class="pwd-eye" data-target="f-pass" title="Show / hide">◐</button>
+            </div>
+          </label>
         </div>
         <div id="auth-key" hidden>
           <label>KEY PATH
@@ -137,9 +187,14 @@
               <button id="btnPickKey" class="btn btn-ghost" type="button">BROWSE</button>
             </div>
           </label>
-          <label>PASSPHRASE <input id="f-passphrase" type="password" autocomplete="new-password"></label>
+          <label>PASSPHRASE
+            <div class="pwd-wrap">
+              <input id="f-passphrase" type="password" autocomplete="new-password">
+              <button type="button" class="pwd-eye" data-target="f-passphrase" title="Show / hide">◐</button>
+            </div>
+          </label>
         </div>
-        <label>START PATH <input id="f-path" placeholder="/root" value="/root" autocomplete="off"></label>
+        <label>START PATH <input id="f-path" placeholder="~ (home) or /var/www" value="~" autocomplete="off"></label>
       </div>
       <div class="modal-footer">
         <button id="btnDel" class="btn btn-danger" hidden>DECOMMISSION</button>
@@ -147,6 +202,34 @@
         <button id="btnCancel" class="btn btn-ghost">CANCEL</button>
         <button id="btnSave" class="btn btn-primary">CONFIRM</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Lockscreen (PIN) -->
+  <div class="lockscreen" id="lockscreen" hidden>
+    <div class="lock-body">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+      <div class="lock-mark">
+        <span class="corner tl"></span>
+        <span class="corner tr"></span>
+        <span class="corner bl"></span>
+        <span class="corner br"></span>
+        <svg class="lock-svg"><use href="#mx-mark"/></svg>
+      </div>
+      <div class="lock-title">MAXTER</div>
+      <div class="lock-sub" id="lockSub">ENTER ACCESS CODE</div>
+
+      <div class="pin-boxes" id="pinBoxes">
+        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+      </div>
+
+      <div class="lock-status" id="lockStatus"></div>
     </div>
   </div>
 

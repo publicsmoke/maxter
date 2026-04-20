@@ -5,6 +5,12 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('servers:list'),
     save: (servers) => ipcRenderer.invoke('servers:save', servers),
   },
+  auth: {
+    status: () => ipcRenderer.invoke('auth:status'),
+    setPin: (opts) => ipcRenderer.invoke('auth:setPin', opts),
+    verify: (opts) => ipcRenderer.invoke('auth:verify', opts),
+    reset: () => ipcRenderer.invoke('auth:reset'),
+  },
   ssh: {
     connect: (opts) => ipcRenderer.invoke('ssh:connect', opts),
     write: (opts) => ipcRenderer.invoke('ssh:write', opts),
@@ -49,5 +55,8 @@ contextBridge.exposeInMainWorld('api', {
   },
   dialog: {
     pickKey: () => ipcRenderer.invoke('dialog:pickKey'),
+  },
+  dock: {
+    setIcon: (dataUrl) => ipcRenderer.invoke('dock:setIcon', dataUrl),
   },
 });
