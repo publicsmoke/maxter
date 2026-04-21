@@ -130,10 +130,13 @@ const THEMES = [
       background: '#282a36', foreground: '#f8f8f2',
       cursor: '#f8f8f2', cursorAccent: '#282a36',
       selectionBackground: '#44475a',
-      black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
-      blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
-      brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5',
-      brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+      // Dracula accent is pink. The classic cyan (#8be9fd) leaks blue into
+      // our banner; classic green (#50fa7b) clashes on purple bg. Pull both
+      // into the pink/purple family — banner/prompt now read as dracula.
+      black: '#21222c', red: '#ff5555', green: '#bd93f9', yellow: '#f1fa8c',
+      blue: '#bd93f9', magenta: '#ff79c6', cyan: '#ff79c6', white: '#f8f8f2',
+      brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#d6acff', brightYellow: '#ffffa5',
+      brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#ff92df', brightWhite: '#ffffff',
     },
   },
   {
@@ -207,10 +210,11 @@ const THEMES = [
       background: '#1e1e2e', foreground: '#cdd6f4',
       cursor: '#f5e0dc', cursorAccent: '#1e1e2e',
       selectionBackground: '#45475a',
-      // Catppuccin accent (CSS var) is pink #f5c2e7. cyan → pink accent.
-      black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
+      // Pink-centric catppuccin. green pulled into rose-pink so ls /
+      // bash PS1 blend with the theme. Keep blue for diff info.
+      black: '#45475a', red: '#f38ba8', green: '#f5c2e7', yellow: '#f9e2af',
       blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#f5c2e7', white: '#bac2de',
-      brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1', brightYellow: '#f9e2af',
+      brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#ffccee', brightYellow: '#f9e2af',
       brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#ffccee', brightWhite: '#a6adc8',
     },
   },
@@ -308,12 +312,12 @@ const THEMES = [
       background: '#fff5f8', foreground: '#4a2c3a',
       cursor: '#e85d75', cursorAccent: '#fff5f8',
       selectionBackground: '#ffcdd8',
-      // Pink-centric palette; cyan was greenish-blue (out of family), now
-      // takes the sakura pink so banner reads on-theme. Purple as the
-      // cool accent, green/yellow kept muted warm for ls output.
-      black: '#4a2c3a', red: '#c62828', green: '#6a9955', yellow: '#d19a66',
+      // All-pink palette. green/brightGreen pulled into rose so ls +
+      // remote bash PS1 `\e[1;32m` blend with the sakura identity instead
+      // of clashing with a random olive-green on pink bg.
+      black: '#4a2c3a', red: '#c62828', green: '#c06a85', yellow: '#d19a66',
       blue: '#b06590', magenta: '#e85d75', cyan: '#e85d75', white: '#7c5064',
-      brightBlack: '#b08090', brightRed: '#e04545', brightGreen: '#85b46a', brightYellow: '#e8b080',
+      brightBlack: '#b08090', brightRed: '#e04545', brightGreen: '#e08aa5', brightYellow: '#e8b080',
       brightBlue: '#d080a8', brightMagenta: '#f57e95', brightCyan: '#ff9ab0', brightWhite: '#4a2c3a',
     },
   },
