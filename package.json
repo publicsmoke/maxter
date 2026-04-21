@@ -1,6 +1,6 @@
 {
   "name": "maxter",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Maxter — SSH/SFTP client with live monitoring panel and Starcraft-inspired UI",
   "main": "main.js",
   "scripts": {

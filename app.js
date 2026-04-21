@@ -882,12 +882,12 @@ async function connectServer(server, options = {}) {
   sess.term = term;
   sess.fitAddon = fit;
 
-  term.writeln('\x1b[38;5;110m── MAXTER TRANSMISSION ─────────────────────────\x1b[0m');
-  term.writeln('\x1b[38;5;110m  TARGET      \x1b[38;5;250m' + server.host + ':' + (server.port || 22) + '\x1b[0m');
-  term.writeln('\x1b[38;5;110m  OPERATOR    \x1b[38;5;250m' + server.username + '\x1b[0m');
-  term.writeln('\x1b[38;5;110m  AUTH        \x1b[38;5;250m' + (server.authMethod === 'key' ? 'KEY FILE' : 'PASSWORD') + '\x1b[0m');
-  term.writeln('\x1b[38;5;110m────────────────────────────────────────────────\x1b[0m');
-  term.writeln('\x1b[38;5;244m› Establishing link ...\x1b[0m\r\n');
+  term.writeln('\x1b[36m── MAXTER TRANSMISSION ─────────────────────────\x1b[0m');
+  term.writeln('\x1b[36m  TARGET      \x1b[37m' + server.host + ':' + (server.port || 22) + '\x1b[0m');
+  term.writeln('\x1b[36m  OPERATOR    \x1b[37m' + server.username + '\x1b[0m');
+  term.writeln('\x1b[36m  AUTH        \x1b[37m' + (server.authMethod === 'key' ? 'KEY FILE' : 'PASSWORD') + '\x1b[0m');
+  term.writeln('\x1b[36m────────────────────────────────────────────────\x1b[0m');
+  term.writeln('\x1b[90m› Establishing link ...\x1b[0m\r\n');
 
   try {
     await window.api.ssh.connect({
@@ -906,15 +906,15 @@ async function connectServer(server, options = {}) {
     setStatus(sess, 'fail');
     renderServerList();
     const friendly = humanizeSshError(e.message || String(e));
-    term.writeln('\x1b[38;5;203m✗ ' + friendly.term + '\x1b[0m');
-    if (friendly.hint) term.writeln('\x1b[38;5;244m  ' + friendly.hint + '\x1b[0m');
+    term.writeln('\x1b[31m✗ ' + friendly.term + '\x1b[0m');
+    if (friendly.hint) term.writeln('\x1b[90m  ' + friendly.hint + '\x1b[0m');
     toast(friendly.toast, 'err');
     return;
   }
 
   const off1 = window.api.ssh.onData(sessionId, data => term.write(data));
   const off2 = window.api.ssh.onClose(sessionId, () => {
-    term.writeln('\r\n\x1b[38;5;244m── LINK SEVERED ──\x1b[0m');
+    term.writeln('\r\n\x1b[90m── LINK SEVERED ──\x1b[0m');
     sess.connecting = false;
     sess.connected = false;
     setStatus(sess, 'fail');
@@ -924,7 +924,7 @@ async function connectServer(server, options = {}) {
     updateStats();
   });
   const off3 = window.api.ssh.onError(sessionId, msg => {
-    term.writeln('\x1b[38;5;203m✗ ' + msg + '\x1b[0m');
+    term.writeln('\x1b[31m✗ ' + msg + '\x1b[0m');
   });
   sess.cleanup.push(off1, off2, off3);
 
@@ -1045,7 +1045,7 @@ async function reconnectSession(sessionId) {
   sess.connecting = true;
   setStatus(sess, 'warn');
   renderServerList();
-  sess.term.writeln('\r\n\x1b[38;5;244m── RE-ESTABLISHING LINK ──\x1b[0m');
+  sess.term.writeln('\r\n\x1b[90m── RE-ESTABLISHING LINK ──\x1b[0m');
   try {
     await window.api.ssh.connect({
       sessionId,
@@ -1058,7 +1058,7 @@ async function reconnectSession(sessionId) {
     setStatus(sess, 'ok');
     renderServerList();
     renderTabs();
-    sess.term.writeln('\x1b[38;5;120m✓ LINK RESTORED\x1b[0m');
+    sess.term.writeln('\x1b[32m✓ LINK RESTORED\x1b[0m');
     if (sess.view === 'monitor') { resetMonitorSkeleton(sess); startMonitor(sessionId); }
     else if (sess.view === 'sftp') { loadLocal(sessionId); loadRemote(sessionId); }
   } catch (e) {
@@ -1066,7 +1066,7 @@ async function reconnectSession(sessionId) {
     sess.connected = false;
     setStatus(sess, 'fail');
     renderServerList();
-    sess.term.writeln('\x1b[38;5;203m✗ RECONNECT FAILED · ' + (e.message || e) + '\x1b[0m');
+    sess.term.writeln('\x1b[31m✗ RECONNECT FAILED · ' + (e.message || e) + '\x1b[0m');
     toast('Reconnect failed: ' + (e.message || e), 'err');
   }
 }
@@ -2299,8 +2299,13 @@ function renderDocker(sess, containers, code, sessionId) {
 
   list.innerHTML = containers.map(c => {
     const stateCls = c.isRunning ? 'running' : 'stopped';
+    // docker stats' MemUsage is "26MiB / 15.62GiB" where the denominator is
+    // the container's memory LIMIT (defaults to host RAM if no limit set).
+    // The slash portion confuses more than it informs — chop it off and show
+    // just the actual usage; limits are rarely what users are watching.
+    const memOnly = (c.memUsage || '').split('/')[0].trim();
     const statsLine = c.isRunning
-      ? `${escapeHtml(c.cpu || '—')} CPU · ${escapeHtml(c.memUsage || '—')}`
+      ? `${escapeHtml(c.cpu || '—')} CPU · ${escapeHtml(memOnly || '—')}`
       : escapeHtml(c.status || 'stopped');
     const portsTag = c.ports ? ` · <span class="mon-ctr-ports">:${escapeHtml(c.ports)}</span>` : '';
     const metaLine = c.isRunning
