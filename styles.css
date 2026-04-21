@@ -693,28 +693,19 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   color: var(--text-3);
   transition: color 0.12s, background 0.12s;
 }
-/* Subtle dim divider between adjacent inactive tabs — no full borders. */
-.tab + .tab::before {
-  content: '';
-  position: absolute;
-  left: -2px;
-  top: 30%;
-  bottom: 30%;
-  width: 1px;
-  background: var(--line);
-}
+/* Plain 1-px left divider between adjacent tabs (not a pseudo-element so
+   it doesn't compete with the active-tab corner marks). */
+.tab + .tab { border-left: 1px solid var(--line); }
 .tab:hover { color: var(--text-2); background: var(--hover); }
 .tab.active {
   color: var(--text);
   background: var(--bg-0);
-  margin-bottom: -1px;     /* visually overlaps the bar's bottom border */
+  margin-bottom: -1px;               /* overlap the bar's bottom border */
+  border-left-color: transparent;    /* no divider line on active tab */
 }
-.tab.active + .tab::before,
-.tab.active::before { display: none; }
-/* Active tab gets the same corner-frame as cards: top-left, top-right, and
-   bottom-left/right that REACH DOWN past the tabs-bar so the tab "owns" the
-   workspace below — same trick used elsewhere in the app. Drawn via two
-   stacked pseudo-elements (one per top corner). */
+.tab.active + .tab { border-left-color: transparent; }
+/* Active tab gets the two top corner marks in accent, matching the rest of
+   the app's card aesthetic. ::before = top-left, ::after = top-right. */
 .tab.active::before,
 .tab.active::after {
   content: '';
@@ -723,10 +714,9 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   height: 7px;
   border-style: solid;
   border-color: var(--accent);
-  display: block;
   pointer-events: none;
 }
-.tab.active::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.tab.active::before { top: 0; left: 0;  border-width: 1px 0 0 1px; }
 .tab.active::after  { top: 0; right: 0; border-width: 1px 1px 0 0; }
 .tab-seq {
   font-family: var(--family-mono);
@@ -760,12 +750,33 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
 }
 .tab.active .tab-sub { color: var(--text-3); }
 .tab-close {
-  background: transparent; border: none; color: var(--text-4);
-  cursor: pointer; font-size: 12px; padding: 2px 6px;
-  transition: color 0.12s;
-  font-family: var(--family-mono);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-4);
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;               /* hidden until the tab is hovered/active */
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+  border-radius: 0;
 }
-.tab-close:hover { color: var(--alert); }
+.tab-close svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+.tab:hover .tab-close,
+.tab.active .tab-close { opacity: 1; }
+.tab-close:hover {
+  color: var(--alert);
+  border-color: var(--alert);
+  background: color-mix(in srgb, var(--alert) 10%, transparent);
+}
 
 .workspace {
   flex: 1;
@@ -961,9 +972,13 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
 
 .info-dot {
   width: 8px; height: 8px;
-  background: var(--accent-hot);
+  /* Use --accent (same as the sidebar .srv-dot) so both indicators read as
+     the same "theme signature colour". --accent-hot was causing drift in
+     themes where the "hot" variant is from a different hue family (solar
+     burnt-orange + gold, etc). */
+  background: var(--accent);
   border-radius: 50%;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .info-dot.fail {
   background: var(--alert);
