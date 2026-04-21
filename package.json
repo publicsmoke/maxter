@@ -1,19 +1,22 @@
 {
-  "name": "nexus-term",
-  "version": "0.1.0",
+  "name": "maxter",
+  "version": "0.8.2",
   "description": "Maxter — portable SSH/SFTP client for Windows",
   "author": "Maxter",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win portable --x64"
+    "make-icon": "node scripts/make-icon.js",
+    "dist:win": "npm run make-icon && electron-builder --win portable --x64"
   },
   "dependencies": {
     "ssh2": "^1.15.0"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^0.1.99",
     "electron": "^31.3.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1"
   },
   "build": {
     "appId": "com.maxter.term",
@@ -38,8 +41,14 @@
     ],
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
+      "icon": "build/icon.ico",
       "artifactName": "Maxter-${version}-portable.${ext}",
       "executableName": "Maxter"
     },

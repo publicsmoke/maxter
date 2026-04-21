@@ -7,7 +7,7 @@ let activeTabId = null;
 let editingId = null;
 let authMode = 'password';
 let homeDir = '/';
-let currentTheme = 'solar';
+let currentTheme = 'mint';
 
 // Double-click tracker lives at module scope so it survives
 // renderServerList() rebuilding the sidebar between the two clicks.
@@ -381,6 +381,8 @@ function applyTheme(id) {
   dots.forEach(d => d.classList.toggle('active', d.dataset.theme === theme.id));
   const label = document.getElementById('themeLabel');
   if (label) label.textContent = theme.name;
+  // Repaint dock icon with the new palette
+  if (typeof refreshDockIcon === 'function') refreshDockIcon();
 }
 
 // ─── Stars background ───
@@ -564,8 +566,11 @@ function renderServerList() {
   servers.forEach(s => {
     const el = document.createElement('div');
     el.className = 'srv';
-    const online = Array.from(activeSessions.values()).some(a => a.server.id === s.id);
+    const sessionsForSrv = Array.from(activeSessions.values()).filter(a => a.server.id === s.id);
+    const online = sessionsForSrv.some(a => a.connected);
+    const connecting = !online && sessionsForSrv.some(a => a.connecting);
     if (online) el.classList.add('online');
+    else if (connecting) el.classList.add('connecting');
     el.innerHTML = `
       <span class="srv-dot" title="${online ? 'Connected' : 'Offline'}"></span>
       <div class="srv-info">
@@ -772,7 +777,10 @@ async function connectServer(server, options = {}) {
     remotePaneEl: null,
     statusDotEl: null,
     cleanup: [],
+    connecting: true,
     connected: false,
+    selected: { local: new Set(), remote: new Set() },
+    lastClicked: { local: null, remote: null },
   };
   activeSessions.set(sessionId, sess);
   renderWorkspace(sessionId);
@@ -814,11 +822,15 @@ async function connectServer(server, options = {}) {
       cols: term.cols,
       rows: term.rows,
     });
+    sess.connecting = false;
     sess.connected = true;
     setStatus(sess, 'ok');
+    renderServerList();
   } catch (e) {
+    sess.connecting = false;
     sess.connected = false;
     setStatus(sess, 'fail');
+    renderServerList();
     term.writeln('\x1b[38;5;203m✗ CONNECTION FAILED · ' + (e.message || e) + '\x1b[0m');
     toast('Connection failed: ' + (e.message || e), 'err');
     return;
@@ -828,6 +840,7 @@ async function connectServer(server, options = {}) {
   const off2 = window.api.ssh.onClose(sessionId, () => {
     term.writeln('\r\n\x1b[38;5;244m── LINK SEVERED ──\x1b[0m');
     setStatus(sess, 'fail');
+    sess.connecting = false;
     sess.connected = false;
     renderTabs();
     renderServerList();
@@ -866,6 +879,13 @@ async function connectServer(server, options = {}) {
     const inp = sess.remotePaneEl.querySelector('.fs-path');
     if (inp) inp.value = remoteStart;
   }
+
+  // If the user already toggled to SFTP while we were warming up, the remote
+  // pane is showing "AWAITING LINK" — refresh it now.
+  if (sess.view === 'sftp') {
+    loadRemote(sessionId);
+    loadLocal(sessionId);
+  }
 }
 
 function setStatus(sess, kind) {
@@ -877,15 +897,18 @@ function setStatus(sess, kind) {
 
 function renderTabs() {
   const bar = $('#tabsBar');
-  // Preserve sidebar toggle button; clear everything else
+  // Preserve sidebar toggle and lock button; clear everything else
+  const KEEP = new Set(['sidebarToggle', 'lockBtn']);
   Array.from(bar.children).forEach(c => {
-    if (c.id !== 'sidebarToggle') c.remove();
+    if (!KEEP.has(c.id)) c.remove();
   });
+  const lockEl = bar.querySelector('#lockBtn');
   if (activeSessions.size === 0) {
     const ph = document.createElement('div');
     ph.className = 'tab-placeholder';
     ph.textContent = 'NO ACTIVE SESSIONS';
-    bar.appendChild(ph);
+    if (lockEl) bar.insertBefore(ph, lockEl);
+    else bar.appendChild(ph);
     return;
   }
   // Sequence numbering for duplicate sessions. If multiple sessions share the
@@ -918,7 +941,8 @@ function renderTabs() {
       e.stopPropagation();
       disconnectSession(id);
     });
-    bar.appendChild(el);
+    if (lockEl) bar.insertBefore(el, lockEl);
+    else bar.appendChild(el);
   }
 }
 
@@ -994,7 +1018,10 @@ function renderWorkspace(sessionId) {
               <button class="ico-btn" data-act="up" title="Parent directory">↑</button>
               <button class="ico-btn" data-act="home" title="Home">⌂</button>
               <button class="ico-btn" data-act="refresh" title="Refresh">↻</button>
-              <input class="fs-path" value="${escapeHtml(sess.localPath)}" spellcheck="false">
+              <div class="fs-path-wrap">
+                <div class="fs-crumbs" tabindex="0"></div>
+                <input class="fs-path" value="${escapeHtml(sess.localPath)}" spellcheck="false" hidden>
+              </div>
               <button class="ico-btn" data-act="mkdir" title="New directory">+</button>
             </div>
             <div class="fs-header">
@@ -1015,7 +1042,10 @@ function renderWorkspace(sessionId) {
               <button class="ico-btn" data-act="up" title="Parent directory">↑</button>
               <button class="ico-btn" data-act="home" title="Home">⌂</button>
               <button class="ico-btn" data-act="refresh" title="Refresh">↻</button>
-              <input class="fs-path" value="${escapeHtml(sess.remotePath)}" spellcheck="false">
+              <div class="fs-path-wrap">
+                <div class="fs-crumbs" tabindex="0"></div>
+                <input class="fs-path" value="${escapeHtml(sess.remotePath)}" spellcheck="false" hidden>
+              </div>
               <button class="ico-btn" data-act="mkdir" title="New directory">+</button>
             </div>
             <div class="fs-header">
@@ -1062,15 +1092,50 @@ function renderWorkspace(sessionId) {
 
 function bindPaneBar(sessionId, paneEl, side) {
   const pathInput = paneEl.querySelector('.fs-path');
+  const crumbsEl = paneEl.querySelector('.fs-crumbs');
+  const curKeyOf = () => side === 'local' ? 'localPath' : 'remotePath';
+  const loadOf = () => side === 'local' ? loadLocal : loadRemote;
+
+  // ── Path input (edit mode) ──
+  const exitEdit = (commit) => {
+    const sess = activeSessions.get(sessionId);
+    if (!sess) return;
+    if (commit) {
+      const v = pathInput.value.trim();
+      sess[curKeyOf()] = v || (side === 'local' ? homeDir : '/');
+      loadOf()(sessionId);
+    }
+    pathInput.hidden = true;
+    crumbsEl.hidden = false;
+  };
   pathInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter') exitEdit(true);
+    else if (e.key === 'Escape') {
       const sess = activeSessions.get(sessionId);
-      if (!sess) return;
-      if (side === 'local') sess.localPath = pathInput.value || homeDir;
-      else sess.remotePath = pathInput.value || '/';
-      (side === 'local' ? loadLocal : loadRemote)(sessionId);
+      if (sess) pathInput.value = sess[curKeyOf()];
+      exitEdit(false);
     }
   });
+  pathInput.addEventListener('blur', () => exitEdit(true));
+
+  // ── Breadcrumb clicks: navigate; click on empty area → switch to edit ──
+  crumbsEl.addEventListener('click', (e) => {
+    const sess = activeSessions.get(sessionId);
+    if (!sess) return;
+    const crumb = e.target.closest('.crumb');
+    if (crumb && crumb.dataset.path !== undefined) {
+      sess[curKeyOf()] = crumb.dataset.path;
+      pathInput.value = crumb.dataset.path;
+      loadOf()(sessionId);
+      return;
+    }
+    // Click in the empty trailing area → enter edit mode.
+    crumbsEl.hidden = true;
+    pathInput.hidden = false;
+    pathInput.focus();
+    pathInput.select();
+  });
+
   paneEl.querySelectorAll('.fs-bar .ico-btn').forEach(b => {
     b.addEventListener('click', async () => {
       const act = b.dataset.act;
@@ -1111,9 +1176,67 @@ function bindPaneBar(sessionId, paneEl, side) {
   });
 }
 
+// ─── Path bar (breadcrumb + edit mode) ───
+function syncPathBar(sess, side) {
+  const paneEl = side === 'local' ? sess.localPaneEl : sess.remotePaneEl;
+  if (!paneEl) return;
+  const path = side === 'local' ? sess.localPath : sess.remotePath;
+  const input = paneEl.querySelector('.fs-path');
+  const crumbs = paneEl.querySelector('.fs-crumbs');
+  if (input) input.value = path;
+  if (crumbs) renderCrumbs(crumbs, path);
+}
+
+// Path → list of clickable crumbs separated by `/`. Selecting across the row
+// yields the original path text (separators are real `/` chars).
+function renderCrumbs(crumbsEl, fullPath) {
+  crumbsEl.innerHTML = '';
+  if (!fullPath) return;
+  const norm = fullPath.replace(/\/+$/, '') || '/';
+  const isAbs = norm.startsWith('/');
+  const parts = norm.split('/').filter(Boolean);
+
+  let acc;
+  if (isAbs) {
+    const root = document.createElement('span');
+    root.className = 'crumb crumb-root';
+    root.dataset.path = '/';
+    root.textContent = '/';
+    crumbsEl.appendChild(root);
+    acc = '';
+  } else if (parts.length) {
+    // Windows-style: drive letter (or first segment) acts as root.
+    const drive = parts.shift();
+    const root = document.createElement('span');
+    root.className = 'crumb crumb-root';
+    root.dataset.path = drive + '/';
+    root.textContent = drive;
+    crumbsEl.appendChild(root);
+    acc = drive;
+  }
+
+  parts.forEach((p, i) => {
+    // Skip separator only when root '/' is already acting as one (unix abs,
+    // first segment). Everywhere else we emit an explicit `/`.
+    if (!(isAbs && i === 0)) {
+      const sep = document.createElement('span');
+      sep.className = 'crumb-sep';
+      sep.textContent = '/';
+      crumbsEl.appendChild(sep);
+    }
+    acc += '/' + p;
+    const c = document.createElement('span');
+    c.className = 'crumb';
+    c.dataset.path = acc;
+    c.textContent = p;
+    crumbsEl.appendChild(c);
+  });
+}
+
 async function loadLocal(sessionId) {
   const sess = activeSessions.get(sessionId);
   if (!sess) return;
+  syncPathBar(sess, 'local');
   const list = sess.localPaneEl.querySelector('.fs-list');
   list.innerHTML = '<div class="loading">SCANNING · LOCAL</div>';
   try {
@@ -1127,7 +1250,18 @@ async function loadLocal(sessionId) {
 async function loadRemote(sessionId) {
   const sess = activeSessions.get(sessionId);
   if (!sess) return;
+  syncPathBar(sess, 'remote');
   const list = sess.remotePaneEl.querySelector('.fs-list');
+
+  // SSH still warming up? Show "awaiting link" and bail — once connectServer
+  // finishes it calls loadRemote again, so the listing fills in automatically.
+  // This prevents the "SCAN FAILED · No active session" flash when the user
+  // toggles to SFTP before the shell is ready.
+  if (!sess.connected) {
+    list.innerHTML = '<div class="loading">AWAITING LINK · REMOTE</div>';
+    return;
+  }
+
   list.innerHTML = '<div class="loading">SCANNING · REMOTE</div>';
 
   // If the path is still the placeholder (fast SFTP click before connectServer
@@ -1136,8 +1270,7 @@ async function loadRemote(sessionId) {
     try {
       const rp = await window.api.sftp.realpath({ sessionId, path: '.' });
       sess.remotePath = rp;
-      const inp = sess.remotePaneEl.querySelector('.fs-path');
-      if (inp) inp.value = rp;
+      syncPathBar(sess, 'remote');
     } catch (e) { /* fall through — sftp.list will report */ }
   }
 
@@ -1159,47 +1292,140 @@ function renderFileList(sessionId, side, items, listEl) {
     return a.name.localeCompare(b.name);
   });
 
+  // Wipe selection when the listed directory changed; otherwise (refresh of
+  // the same dir) just drop entries whose names disappeared.
+  const curKey = side === 'local' ? 'localPath' : 'remotePath';
+  if (!sess._listedPath) sess._listedPath = { local: null, remote: null };
+  if (sess._listedPath[side] !== sess[curKey]) {
+    sess.selected[side].clear();
+    sess.lastClicked[side] = null;
+    sess._listedPath[side] = sess[curKey];
+  } else {
+    const present = new Set(items.map(i => i.name));
+    for (const n of [...sess.selected[side]]) {
+      if (!present.has(n)) sess.selected[side].delete(n);
+    }
+  }
+
   listEl.innerHTML = '';
   if (items.length === 0) {
     listEl.innerHTML = '<div class="empty">EMPTY</div>';
     return;
   }
 
-  const curKey = side === 'local' ? 'localPath' : 'remotePath';
   const arrow = side === 'local' ? '→' : '←';
+  // Index for shift-range selection; mirrors render order so consecutive
+  // rows in the DOM are also consecutive in this list.
+  const orderedNames = items.map(i => i.name);
 
   for (const item of items) {
     const row = document.createElement('div');
     row.className = 'fs-row' + (item.isDir ? ' dir' : '');
+    if (sess.selected[side].has(item.name)) row.classList.add('selected');
+    row.dataset.name = item.name;
+    // Symlinks aren't followed in transfers (avoids loops/escapes); skip drag.
+    if (!item.isLink) row.draggable = true;
     const icon = item.isDir ? '▪' : (item.isLink ? '↪' : '·');
+    const xferTitle = side === 'local'
+      ? (item.isDir ? 'Upload directory to remote' : 'Upload to remote')
+      : (item.isDir ? 'Download directory to local' : 'Download to local');
     row.innerHTML = `
       <span class="f-ico">${icon}</span>
       <span class="f-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span>
       <span class="f-size">${item.isDir ? '—' : humanSize(item.size)}</span>
       <span class="f-date">${fmtDate(item.mtime)}</span>
       <span class="f-actions">
-        ${item.isDir ? '' : `<button class="row-btn transfer" data-act="xfer" title="${side === 'local' ? 'Upload to remote' : 'Download to local'}">${arrow}</button>`}
+        ${item.isLink ? '' : `<button class="row-btn transfer" data-act="xfer" title="${xferTitle}">${arrow}</button>`}
         <button class="row-btn" data-act="rn" title="Rename">✎</button>
         <button class="row-btn danger" data-act="rm" title="Delete">×</button>
       </span>
     `;
 
-    const nameEl = row.querySelector('.f-name');
-    if (item.isDir) {
-      nameEl.addEventListener('click', () => {
-        sess[curKey] = joinPath(sess[curKey], item.name);
-        const input = (side === 'local' ? sess.localPaneEl : sess.remotePaneEl).querySelector('.fs-path');
-        input.value = sess[curKey];
-        (side === 'local' ? loadLocal : loadRemote)(sessionId);
-      });
-    }
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.row-btn')) return;
+      const sel = sess.selected[side];
+      if (e.shiftKey && sess.lastClicked[side]) {
+        const a = orderedNames.indexOf(sess.lastClicked[side]);
+        const b = orderedNames.indexOf(item.name);
+        if (a !== -1 && b !== -1) {
+          const [lo, hi] = a < b ? [a, b] : [b, a];
+          if (!(e.metaKey || e.ctrlKey)) sel.clear();
+          for (let i = lo; i <= hi; i++) sel.add(orderedNames[i]);
+        }
+      } else if (e.metaKey || e.ctrlKey) {
+        if (sel.has(item.name)) sel.delete(item.name);
+        else sel.add(item.name);
+        sess.lastClicked[side] = item.name;
+      } else {
+        sel.clear();
+        sel.add(item.name);
+        sess.lastClicked[side] = item.name;
+      }
+      paintSelection(sess, side);
+    });
+
+    // Double-click: dirs navigate, files no-op (use the transfer button).
+    row.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.row-btn')) return;
+      if (!item.isDir) return;
+      sess[curKey] = joinPath(sess[curKey], item.name);
+      (side === 'local' ? loadLocal : loadRemote)(sessionId);
+    });
+
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // If user right-clicks an unselected row, switch the selection to it
+      // first (matches Finder/Explorer); otherwise the menu acts on whatever
+      // is already selected.
+      if (!sess.selected[side].has(item.name)) {
+        sess.selected[side].clear();
+        sess.selected[side].add(item.name);
+        sess.lastClicked[side] = item.name;
+        paintSelection(sess, side);
+      }
+      showContextMenu(e.clientX, e.clientY, sessionId, side, item);
+    });
+
+    row.addEventListener('dragstart', (e) => {
+      if (item.isLink) { e.preventDefault(); return; }
+      // If user starts dragging a row that isn't part of the current
+      // selection, switch to single-item drag — matches native file managers.
+      if (!sess.selected[side].has(item.name)) {
+        sess.selected[side].clear();
+        sess.selected[side].add(item.name);
+        paintSelection(sess, side);
+      }
+      const names = [...sess.selected[side]];
+      const payload = JSON.stringify({ sessionId, side, names });
+      // Custom mime carries our routing info; text/plain is set so Chromium
+      // recognises this as a real DnD payload (some Electron versions silently
+      // drop drags with only non-standard mime types).
+      e.dataTransfer.setData('application/x-maxter-files', payload);
+      e.dataTransfer.setData('text/plain', names.join('\n'));
+      // 'move' over 'copy' so the OS doesn't slap a + badge on the cursor —
+      // the actual transfer is still a copy (we never delete the source);
+      // dropEffect is just a UI hint and our drop handler ignores it.
+      e.dataTransfer.effectAllowed = 'move';
+      sess._dragPayload = { sessionId, side, names };
+    });
+
+    row.addEventListener('dragend', () => {
+      sess._dragPayload = null;
+      // Belt-and-suspenders: clear the highlight from any pane that still has
+      // it (in case dragleave didn't fire — happens on fast cursor exits).
+      document.querySelectorAll('.fs-list.drag-target').forEach(el => el.classList.remove('drag-target'));
+    });
 
     row.querySelectorAll('.f-actions .row-btn').forEach(b => {
       b.addEventListener('click', async (e) => {
         e.stopPropagation();
         const act = b.dataset.act;
         if (act === 'xfer') {
-          await handleTransfer(sessionId, side, item, b);
+          // If row is in the current selection, transfer the whole batch;
+          // otherwise just this one.
+          const sel = sess.selected[side];
+          const names = sel.has(item.name) ? [...sel] : [item.name];
+          await handleBatchTransfer(sessionId, side, names);
         } else if (act === 'rn') {
           const nn = await showPrompt('Rename to:', item.name, {
             title: 'RENAME', okText: 'RENAME',
@@ -1232,43 +1458,432 @@ function renderFileList(sessionId, side, items, listEl) {
 
     listEl.appendChild(row);
   }
+
+  bindPaneDropTarget(sessionId, side);
 }
 
-async function handleTransfer(sessionId, side, item, btn) {
+function paintSelection(sess, side) {
+  const paneEl = side === 'local' ? sess.localPaneEl : sess.remotePaneEl;
+  if (!paneEl) return;
+  paneEl.querySelectorAll('.fs-row').forEach(r => {
+    r.classList.toggle('selected', sess.selected[side].has(r.dataset.name));
+  });
+}
+
+function bindPaneDropTarget(sessionId, side) {
+  // Bind drop on the WHOLE pane (header, bar, list) so users can release
+  // anywhere over the destination column, not just the file list. Stable
+  // across renders, so guard with a flag to avoid double-binding.
   const sess = activeSessions.get(sessionId);
   if (!sess) return;
-  btn.disabled = true;
-  const origText = btn.textContent;
-  btn.textContent = '…';
+  const paneEl = side === 'local' ? sess.localPaneEl : sess.remotePaneEl;
+  if (!paneEl || paneEl._dropBound) return;
+  paneEl._dropBound = true;
 
-  try {
-    if (side === 'local') {
-      const localPath = joinPath(sess.localPath, item.name);
-      const remotePath = joinPath(sess.remotePath, item.name);
-      await window.api.sftp.sendFile({ sessionId, localPath, remotePath });
-      toast('Uploaded · ' + item.name, 'ok');
-      loadRemote(sessionId);
-    } else {
-      const localPath = joinPath(sess.localPath, item.name);
-      const remotePath = joinPath(sess.remotePath, item.name);
-      await window.api.sftp.getFile({ sessionId, remotePath, localPath });
-      toast('Downloaded · ' + item.name, 'ok');
-      loadLocal(sessionId);
+  // Counter pattern for dragenter/leave: child elements (rows, headers) fire
+  // their own enter/leave events that bubble up, so a single boolean flips
+  // constantly. Counting enters/leaves gives a stable "drag inside pane".
+  let dragDepth = 0;
+
+  const isOurDrag = (e) => {
+    if (!e.dataTransfer) return false;
+    const types = e.dataTransfer.types;
+    if (!types) return false;
+    // DOMStringList in older specs, plain array in newer — handle both.
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === 'application/x-maxter-files') return true;
     }
+    return false;
+  };
+
+  const sameSide = () => {
+    const s = activeSessions.get(sessionId);
+    const src = s && s._dragPayload;
+    return src && src.side === side;
+  };
+
+  paneEl.addEventListener('dragenter', (e) => {
+    if (!isOurDrag(e) || sameSide()) return;
+    e.preventDefault();
+    dragDepth++;
+    paneEl.classList.add('drag-target');
+  });
+
+  paneEl.addEventListener('dragover', (e) => {
+    if (!isOurDrag(e) || sameSide()) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  });
+
+  paneEl.addEventListener('dragleave', (e) => {
+    if (!isOurDrag(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) paneEl.classList.remove('drag-target');
+  });
+
+  paneEl.addEventListener('drop', async (e) => {
+    if (!isOurDrag(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    paneEl.classList.remove('drag-target');
+    if (sameSide()) return;
+    const s = activeSessions.get(sessionId);
+    if (!s) return;
+    let payload = s._dragPayload;
+    if (!payload) {
+      try {
+        const raw = e.dataTransfer.getData('application/x-maxter-files');
+        if (raw) payload = JSON.parse(raw);
+      } catch (_) {}
+    }
+    if (!payload) return;
+    await handleBatchTransfer(payload.sessionId, payload.side, payload.names);
+  });
+}
+
+async function handleBatchTransfer(sessionId, side, names) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !names || !names.length) return;
+
+  const srcDir = side === 'local' ? sess.localPath : sess.remotePath;
+  const dstDir = side === 'local' ? sess.remotePath : sess.localPath;
+
+  // Re-list source so we know each name's isDir/isLink — selection only
+  // tracks names, not metadata.
+  let srcItems = [];
+  try {
+    srcItems = side === 'local'
+      ? await window.api.local.list({ path: srcDir })
+      : await window.api.sftp.list({ sessionId, path: srcDir });
   } catch (e) {
-    toast('Transfer failed · ' + e.message, 'err');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = origText;
+    toast('Could not read source: ' + e.message, 'err');
+    return;
+  }
+  const itemMap = new Map(srcItems.map(i => [i.name, i]));
+
+  // Cache of dest-side names for unique-name generation in "copy" mode. Lazy
+  // so we don't pay the readdir cost when there are no conflicts.
+  let dstNamesCache = null;
+  const getDstNames = async () => {
+    if (dstNamesCache) return dstNamesCache;
+    try {
+      const list = side === 'local'
+        ? await window.api.sftp.list({ sessionId, path: dstDir })
+        : await window.api.local.list({ path: dstDir });
+      dstNamesCache = new Set(list.map(i => i.name));
+    } catch (_) {
+      dstNamesCache = new Set();
+    }
+    return dstNamesCache;
+  };
+
+  let okN = 0, failN = 0, skippedN = 0;
+  let applyAll = null; // 'overwrite' | 'copy' | 'cancel' once user picks
+
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    const item = itemMap.get(name);
+    if (!item) { skippedN++; continue; }
+    if (item.isLink) { skippedN++; continue; } // symlinks not followed
+
+    let destName = name;
+    const destPath = joinPath(dstDir, name);
+    const exists = side === 'local'
+      ? await window.api.sftp.exists({ sessionId, path: destPath })
+      : await window.api.local.exists({ path: destPath });
+
+    if (exists) {
+      const decision = applyAll
+        ? { action: applyAll, applyAll: true }
+        : await showOverwriteDialog(name, dstDir, side);
+      if (decision.applyAll) applyAll = decision.action;
+
+      if (decision.action === 'cancel') {
+        if (applyAll === 'cancel') {
+          skippedN += names.length - i;
+          break;
+        }
+        skippedN++;
+        continue;
+      }
+      if (decision.action === 'copy') {
+        const used = await getDstNames();
+        destName = uniqueName(name, used);
+        used.add(destName);
+      }
+      // 'overwrite' → leave destName alone
+    }
+
+    const finalDest = joinPath(dstDir, destName);
+    try {
+      const srcPath = joinPath(srcDir, name);
+      if (side === 'local') {
+        if (item.isDir) await window.api.sftp.sendDir({ sessionId, localPath: srcPath, remotePath: finalDest });
+        else            await window.api.sftp.sendFile({ sessionId, localPath: srcPath, remotePath: finalDest });
+      } else {
+        if (item.isDir) await window.api.sftp.getDir({ sessionId, remotePath: srcPath, localPath: finalDest });
+        else            await window.api.sftp.getFile({ sessionId, remotePath: srcPath, localPath: finalDest });
+      }
+      okN++;
+    } catch (e) {
+      failN++;
+      toast('Failed · ' + name + ' · ' + e.message, 'err');
+    }
+  }
+
+  const verb = side === 'local' ? 'Uploaded' : 'Downloaded';
+  const tail = skippedN ? `, ${skippedN} skipped` : '';
+  if (okN && !failN) toast(`${verb} ${okN} item${okN > 1 ? 's' : ''}${tail}`, 'ok');
+  else if (okN && failN) toast(`${verb} ${okN}, ${failN} failed${tail}`, 'err');
+  else if (skippedN && !okN && !failN) toast(`Skipped ${skippedN}`, 'warn');
+
+  sess.selected[side].clear();
+  paintSelection(sess, side);
+  if (side === 'local') loadRemote(sessionId); else loadLocal(sessionId);
+}
+
+// "file.txt" + {file.txt, file (2).txt} → "file (3).txt".
+// Walks the existing-set until we land on a free name. Preserves the last
+// extension; treats `tar.gz`-style as a single ext is intentionally NOT
+// supported (matches macOS Finder behaviour).
+function uniqueName(name, used) {
+  if (!used.has(name)) return name;
+  const dot = name.lastIndexOf('.');
+  const hasExt = dot > 0 && dot < name.length - 1;
+  const base = hasExt ? name.slice(0, dot) : name;
+  const ext = hasExt ? name.slice(dot) : '';
+  const m = base.match(/^(.*) \((\d+)\)$/);
+  const stem = m ? m[1] : base;
+  let n = m ? parseInt(m[2], 10) + 1 : 2;
+  let candidate = `${stem} (${n})${ext}`;
+  while (used.has(candidate)) {
+    n++;
+    candidate = `${stem} (${n})${ext}`;
+  }
+  return candidate;
+}
+
+function showOverwriteDialog(name, dstDir, srcSide) {
+  return new Promise(resolve => {
+    const destLabel = srcSide === 'local' ? 'REMOTE' : 'LOCAL';
+    const back = document.createElement('div');
+    back.className = 'modal info-modal';
+    back.innerHTML = `
+      <div class="modal-body dialog-body ovr-body">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <div class="modal-header">ITEM EXISTS</div>
+        <div class="dialog-msg ovr-msg">
+          <div class="ovr-name">${escapeHtml(name)}</div>
+          <div class="ovr-path">already exists at <span class="ovr-dest">${destLabel} · ${escapeHtml(dstDir)}</span></div>
+        </div>
+        <label class="ovr-applyall">
+          <input type="checkbox" class="ovr-applyall-cb">
+          <span>APPLY TO REMAINING ITEMS</span>
+        </label>
+        <div class="modal-footer ovr-foot">
+          <button class="btn btn-ghost ovr-cancel">SKIP</button>
+          <button class="btn btn-ghost ovr-copy">TRANSFER AS COPY</button>
+          <button class="btn btn-primary ovr-overwrite">OVERWRITE</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(back);
+    const cb = back.querySelector('.ovr-applyall-cb');
+    const finish = (action) => {
+      back.remove();
+      document.removeEventListener('keydown', onEsc);
+      resolve({ action, applyAll: cb.checked });
+    };
+    function onEsc(e) { if (e.key === 'Escape') finish('cancel'); }
+    back.querySelector('.ovr-overwrite').onclick = () => finish('overwrite');
+    back.querySelector('.ovr-copy').onclick = () => finish('copy');
+    back.querySelector('.ovr-cancel').onclick = () => finish('cancel');
+    back.addEventListener('click', (e) => { if (e.target === back) finish('cancel'); });
+    document.addEventListener('keydown', onEsc);
+    setTimeout(() => back.querySelector('.ovr-overwrite').focus(), 50);
+  });
+}
+
+// ─── Context menu + Properties ───
+let ctxMenuEl = null;
+function closeContextMenu() {
+  if (ctxMenuEl) { ctxMenuEl.remove(); ctxMenuEl = null; }
+}
+document.addEventListener('click', closeContextMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextMenu(); });
+window.addEventListener('blur', closeContextMenu);
+window.addEventListener('resize', closeContextMenu);
+
+function showContextMenu(x, y, sessionId, side, item) {
+  closeContextMenu();
+  const sess = activeSessions.get(sessionId);
+  if (!sess) return;
+
+  const sel = sess.selected[side];
+  const multi = sel.size > 1 && sel.has(item.name);
+  const transferLabel = side === 'local' ? 'Upload to remote' : 'Download to local';
+  const items = [];
+
+  if (item.isDir && !multi) items.push({ label: 'Open', act: 'open' });
+  if (!multi) items.push({ label: 'Copy path', act: 'copy-path' });
+  // Cross-pane transfer doesn't apply to dirs (no recursive SFTP yet).
+  if (!item.isDir) items.push({ label: transferLabel, act: 'xfer' });
+  items.push({ sep: true });
+  if (!multi) items.push({ label: 'Rename', act: 'rename' });
+  items.push({ label: multi ? `Delete ${sel.size} items` : 'Delete', act: 'delete', danger: true });
+  items.push({ sep: true });
+  items.push({ label: 'Properties', act: 'props' });
+
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = items.map(i =>
+    i.sep
+      ? '<div class="ctx-sep"></div>'
+      : `<div class="ctx-item${i.danger ? ' danger' : ''}" data-act="${i.act}">${escapeHtml(i.label)}</div>`
+  ).join('');
+  menu.addEventListener('click', (ev) => ev.stopPropagation());
+
+  document.body.appendChild(menu);
+  ctxMenuEl = menu;
+
+  // Position then clamp to viewport.
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth) menu.style.left = (window.innerWidth - r.width - 6) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top = (window.innerHeight - r.height - 6) + 'px';
+
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      const act = el.dataset.act;
+      closeContextMenu();
+      await runCtxAction(act, sessionId, side, item);
+    });
+  });
+}
+
+async function runCtxAction(act, sessionId, side, item) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess) return;
+  const curKey = side === 'local' ? 'localPath' : 'remotePath';
+  const sel = sess.selected[side];
+  const names = sel.has(item.name) ? [...sel] : [item.name];
+
+  if (act === 'open' && item.isDir) {
+    sess[curKey] = joinPath(sess[curKey], item.name);
+    (side === 'local' ? loadLocal : loadRemote)(sessionId);
+  } else if (act === 'copy-path') {
+    const full = joinPath(sess[curKey], item.name);
+    try { await navigator.clipboard.writeText(full); toast('Path copied', 'ok'); }
+    catch (e) { toast('Copy failed', 'err'); }
+  } else if (act === 'xfer') {
+    await handleBatchTransfer(sessionId, side, names);
+  } else if (act === 'rename') {
+    const nn = await showPrompt('Rename to:', item.name, { title: 'RENAME', okText: 'RENAME' });
+    if (!nn || nn === item.name) return;
+    const from = joinPath(sess[curKey], item.name);
+    const to = joinPath(sess[curKey], nn);
+    try {
+      if (side === 'local') await window.api.local.rename({ from, to });
+      else await window.api.sftp.rename({ sessionId, from, to });
+      (side === 'local' ? loadLocal : loadRemote)(sessionId);
+      toast('Renamed', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+  } else if (act === 'delete') {
+    const label = names.length > 1 ? `${names.length} items` : item.name;
+    const ok = await showConfirm(
+      `Delete ${label}${item.isDir && names.length === 1 ? ' (recursive)' : ''}?`,
+      { title: 'DELETE', okText: 'DELETE', danger: true }
+    );
+    if (!ok) return;
+    let okN = 0, failN = 0;
+    for (const n of names) {
+      const target = joinPath(sess[curKey], n);
+      const isDir = (n === item.name) ? item.isDir : false; // best-effort for batch
+      try {
+        if (side === 'local') await window.api.local.delete({ path: target, isDir });
+        else await window.api.sftp.delete({ sessionId, path: target, isDir });
+        okN++;
+      } catch (e) { failN++; }
+    }
+    if (okN) toast(`Deleted ${okN}${failN ? `, ${failN} failed` : ''}`, failN ? 'err' : 'ok');
+    sel.clear();
+    (side === 'local' ? loadLocal : loadRemote)(sessionId);
+  } else if (act === 'props') {
+    showProperties(sess, side, item);
   }
 }
 
+function showProperties(sess, side, item) {
+  const curKey = side === 'local' ? 'localPath' : 'remotePath';
+  const fullPath = joinPath(sess[curKey], item.name);
+  const type = item.isDir ? 'Directory' : (item.isLink ? 'Symbolic link' : 'File');
+  const sizeStr = item.isDir ? '—' : `${humanSize(item.size)} (${item.size.toLocaleString()} bytes)`;
+  const modeStr = item.mode != null ? `0${(item.mode & 0o777).toString(8).padStart(3, '0')}` : '—';
+  const mtimeStr = item.mtime ? new Date(item.mtime * 1000).toLocaleString() : '—';
+
+  const rows = [
+    ['NAME', item.name],
+    ['LOCATION', sess[curKey]],
+    ['FULL PATH', fullPath],
+    ['SOURCE', side.toUpperCase()],
+    ['TYPE', type],
+    ['SIZE', sizeStr],
+    ['MODIFIED', mtimeStr],
+    ['MODE', modeStr],
+  ];
+
+  const html = rows.map(([k, v]) =>
+    `<div class="props-row"><span class="props-k">${k}</span><span class="props-v">${escapeHtml(String(v))}</span></div>`
+  ).join('');
+
+  showInfo('PROPERTIES', html);
+}
+
+// Standalone info modal — separate from the confirm/prompt machinery to avoid
+// fighting over the shared dialog buttons.
+function showInfo(title, htmlBody) {
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body dialog-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header">${escapeHtml(title)}</div>
+      <div class="dialog-msg info-body"></div>
+      <div class="modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn btn-primary info-close">CLOSE</button>
+      </div>
+    </div>
+  `;
+  back.querySelector('.info-body').innerHTML = htmlBody;
+  document.body.appendChild(back);
+  const close = () => back.remove();
+  back.querySelector('.info-close').addEventListener('click', close);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', function onEsc(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
+  });
+}
+
 // ─── Keyboard ───
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || '');
 document.addEventListener('keydown', e => {
   if (!$('#lockscreen').hidden) return; // locked — ignore
   if (e.key === 'Escape' && !$('#modal').hidden) {
     $('#modal').hidden = true;
     return;
+  }
+  // Mac: ⌘L. Win/Linux: Ctrl+Shift+L — plain Ctrl+L is reserved (xterm/bash
+  // clear-screen), so we require Shift there to avoid eating that keystroke.
+  const lockCombo = IS_MAC
+    ? (e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey)
+    : (e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey);
+  if (lockCombo && (e.key === 'l' || e.key === 'L') && $('#modal').hidden) {
+    e.preventDefault();
+    lockNow();
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'w' && activeTabId && $('#modal').hidden) {
     e.preventDefault();
@@ -1283,6 +1898,22 @@ document.addEventListener('keydown', e => {
     setSidebarHidden(!document.body.classList.contains('sidebar-hidden'));
   }
 });
+
+// ─── Lock button ───
+function lockNow() {
+  // No PIN configured? Nothing meaningful to lock to — bail silently.
+  // (boot() bypasses the lockscreen entirely when hasPin is false.)
+  setLockMode('enter');
+  showLock();
+}
+(() => {
+  const btn = $('#lockBtn');
+  if (!btn) return;
+  const combo = IS_MAC ? '⌘ L' : 'CTRL ⇧ L';
+  btn.dataset.shortcut = combo;
+  btn.title = `Lock workspace · ${combo}`;
+  btn.addEventListener('click', lockNow);
+})();
 
 // ─── PIN lockscreen ───
 const PIN_LEN = 4;
@@ -1498,25 +2129,30 @@ themeToggleEl.addEventListener('keydown', e => {
 });
 
 // ─── Dock icon generator (macOS) ───
+// Picks colours from the currently-applied theme so the dock reflects the
+// active palette. Called on boot and after any theme change.
 async function makeDockIconDataURL() {
   try {
-    // Make sure Rajdhani is loaded before we rasterise the glyph
     try {
-      await document.fonts.load('900 560px Rajdhani');
+      await document.fonts.load('900 500px Rajdhani');
       await document.fonts.ready;
     } catch (e) {}
+
+    // Theme variables are declared on body.theme-X, not :root — so read from
+    // <body>, otherwise getComputedStyle returns the :root defaults (Obsidian).
+    const cs = getComputedStyle(document.body);
+    const bgColor     = (cs.getPropertyValue('--bg-0').trim()       || '#fdf6e3');
+    const accentColor = (cs.getPropertyValue('--accent').trim()     || '#cb4b16');
+    const accentHot   = (cs.getPropertyValue('--accent-hot').trim() || '#b58900');
 
     const size = 1024;
     const canvas = document.createElement('canvas');
     canvas.width = size; canvas.height = size;
     const ctx = canvas.getContext('2d');
-    const radius = size * 0.22;
+    const radius = size * 0.2;
 
-    // Dark diagonal gradient background
-    const bg = ctx.createLinearGradient(0, 0, size, size);
-    bg.addColorStop(0, '#1a1b24');
-    bg.addColorStop(1, '#05060a');
-    ctx.fillStyle = bg;
+    // Rounded background — flat theme bg, no gradient (cleaner)
+    ctx.fillStyle = bgColor;
     if (ctx.roundRect) {
       ctx.beginPath();
       ctx.roundRect(0, 0, size, size, radius);
@@ -1525,30 +2161,35 @@ async function makeDockIconDataURL() {
       ctx.fillRect(0, 0, size, size);
     }
 
-    // Inner square accent frame — hugs the letter
-    const frameInset = size * 0.11;
+    // Inner square accent frame
+    const frameInset = size * 0.115;
     const frameSize = size - frameInset * 2;
-    ctx.strokeStyle = '#6695c4';
-    ctx.lineWidth = Math.max(2, size * 0.009);
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = Math.max(2, size * 0.008);
     ctx.lineCap = 'square';
     ctx.strokeRect(frameInset, frameInset, frameSize, frameSize);
 
-    // Letter M — Rajdhani Black, optically centered in the frame
-    ctx.font = `900 ${Math.round(size * 0.72)}px "Rajdhani", "Inter", sans-serif`;
+    // Corner ticks — brand detail (heavier strokes at each corner)
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = Math.max(3, size * 0.016);
+    const tickLen = size * 0.06;
+    const t = frameInset;
+    ctx.beginPath(); ctx.moveTo(t, t + tickLen); ctx.lineTo(t, t); ctx.lineTo(t + tickLen, t); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(size - t - tickLen, t); ctx.lineTo(size - t, t); ctx.lineTo(size - t, t + tickLen); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(t, size - t - tickLen); ctx.lineTo(t, size - t); ctx.lineTo(t + tickLen, size - t); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(size - t - tickLen, size - t); ctx.lineTo(size - t, size - t); ctx.lineTo(size - t, size - t - tickLen); ctx.stroke();
+
+    // Letter M — Rajdhani Black in accent-hot, optically centered
+    ctx.font = `900 ${Math.round(size * 0.7)}px "Rajdhani", "Inter", sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#d4e2f2';
-    ctx.shadowColor = 'rgba(102,149,196,0.55)';
-    ctx.shadowBlur = size * 0.035;
-    // Measure actual glyph bounds and place baseline so the glyph's visual
-    // center lines up exactly with the frame's geometric center.
+    ctx.fillStyle = accentHot;
     const metrics = ctx.measureText('M');
     const ascent = metrics.actualBoundingBoxAscent || size * 0.5;
     const descent = metrics.actualBoundingBoxDescent || 0;
     const frameCenterY = frameInset + frameSize / 2;
     const baselineY = frameCenterY + (ascent - descent) / 2;
     ctx.fillText('M', size / 2, baselineY);
-    ctx.shadowBlur = 0;
 
     return canvas.toDataURL('image/png');
   } catch (e) {
@@ -1556,20 +2197,25 @@ async function makeDockIconDataURL() {
   }
 }
 
-// ─── Boot ───
-(async function boot() {
-  // Dock icon (macOS only; main-process ignores on other platforms)
+async function refreshDockIcon() {
   try {
     const url = await makeDockIconDataURL();
     if (url) await window.api.dock.setIcon(url);
   } catch (e) {}
+}
 
-  // Theme (early, so lockscreen uses it)
+// ─── Boot ───
+(async function boot() {
+  // Theme (early, so lockscreen + dock icon use it)
   try {
     const saved = localStorage.getItem('nexus.theme') || localStorage.getItem('maxter.theme');
     if (saved && THEMES.some(t => t.id === saved)) currentTheme = saved;
   } catch (e) {}
   applyTheme(currentTheme);
+
+  // Dock icon (macOS only; reads colours from --bg-0/--accent/--accent-hot
+  // of the applied theme, so must run AFTER applyTheme).
+  refreshDockIcon();
 
   // Font (after theme, before UI reads var(--family-*))
   try {

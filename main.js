@@ -48,7 +48,11 @@ let mainWindow;
 const sessions = new Map(); // sessionId -> { conn, stream, sftp }
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  // Static .ico baked into the .exe by electron-builder; in dev (`npm start`)
+  // we still load it explicitly so the taskbar/title-bar isn't the generic
+  // Electron atom while the renderer warms up. Once the renderer boots, it
+  // pushes a theme-coloured icon via the dock:setIcon IPC below.
+  const opts = {
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -61,7 +65,12 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  };
+  if (process.platform === 'win32') {
+    const icoPath = path.join(__dirname, 'build', 'icon.ico');
+    if (fs.existsSync(icoPath)) opts.icon = icoPath;
+  }
+  mainWindow = new BrowserWindow(opts);
   mainWindow.loadFile('index.html');
 }
 
@@ -372,11 +381,21 @@ ipcMain.handle('sftp:upload', async (_e, { sessionId, remoteDir }) => {
 });
 
 ipcMain.handle('dock:setIcon', (_e, dataUrl) => {
-  if (process.platform !== 'darwin' || !app.dock) return false;
   try {
     const img = nativeImage.createFromDataURL(dataUrl);
-    if (!img.isEmpty()) app.dock.setIcon(img);
-    return true;
+    if (img.isEmpty()) return false;
+    if (process.platform === 'darwin' && app.dock) {
+      app.dock.setIcon(img);
+      return true;
+    }
+    if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+      // Taskbar + window icon while app is running. The baked-in .exe icon
+      // (visible in File Explorer when app is NOT running) still comes from
+      // build/icon.ico at package time.
+      mainWindow.setIcon(img);
+      return true;
+    }
+    return false;
   } catch (e) {
     return false;
   }
@@ -447,4 +466,68 @@ ipcMain.handle('sftp:getFile', async (_e, { sessionId, remotePath, localPath }) 
   return new Promise((resolve, reject) => {
     sftp.fastGet(remotePath, path.normalize(localPath), err => err ? reject(err) : resolve(true));
   });
+});
+
+// ssh2 doesn't ship a recursive copier, so we walk the tree ourselves and
+// fan out fastPut/fastGet per file. Symlinks are skipped — chasing them is a
+// foot-gun (loops, escapes outside the source tree).
+function sftpMkdirIfMissing(sftp, p) {
+  return new Promise((resolve, reject) => {
+    sftp.mkdir(p, err => {
+      if (!err) return resolve();
+      sftp.stat(p, statErr => statErr ? reject(err) : resolve());
+    });
+  });
+}
+
+async function sendDirRecursive(sftp, localDir, remoteDir) {
+  await sftpMkdirIfMissing(sftp, remoteDir);
+  const entries = await fs.promises.readdir(localDir, { withFileTypes: true });
+  for (const ent of entries) {
+    if (ent.name === '.' || ent.name === '..') continue;
+    const lp = path.join(localDir, ent.name);
+    const rp = path.posix.join(remoteDir, ent.name);
+    if (ent.isDirectory()) {
+      await sendDirRecursive(sftp, lp, rp);
+    } else if (ent.isFile()) {
+      await new Promise((res, rej) => sftp.fastPut(lp, rp, e => e ? rej(e) : res()));
+    }
+  }
+}
+
+async function getDirRecursive(sftp, remoteDir, localDir) {
+  await fs.promises.mkdir(localDir, { recursive: true });
+  const list = await new Promise((res, rej) => sftp.readdir(remoteDir, (e, l) => e ? rej(e) : res(l)));
+  for (const item of list) {
+    if (item.filename === '.' || item.filename === '..') continue;
+    const rp = path.posix.join(remoteDir, item.filename);
+    const lp = path.join(localDir, item.filename);
+    const isDir = (item.attrs.mode & 0o170000) === 0o040000;
+    const isLink = (item.attrs.mode & 0o170000) === 0o120000;
+    if (isLink) continue;
+    if (isDir) await getDirRecursive(sftp, rp, lp);
+    else await new Promise((res, rej) => sftp.fastGet(rp, lp, e => e ? rej(e) : res()));
+  }
+}
+
+ipcMain.handle('sftp:sendDir', async (_e, { sessionId, localPath, remotePath }) => {
+  const sftp = await getSftp(sessionId);
+  await sendDirRecursive(sftp, path.normalize(localPath), remotePath);
+  return true;
+});
+
+ipcMain.handle('sftp:getDir', async (_e, { sessionId, remotePath, localPath }) => {
+  const sftp = await getSftp(sessionId);
+  await getDirRecursive(sftp, remotePath, path.normalize(localPath));
+  return true;
+});
+
+ipcMain.handle('sftp:exists', async (_e, { sessionId, path: p }) => {
+  const sftp = await getSftp(sessionId);
+  return new Promise(resolve => sftp.stat(p, err => resolve(!err)));
+});
+
+ipcMain.handle('local:exists', async (_e, { path: p }) => {
+  try { await fs.promises.access(path.normalize(p)); return true; }
+  catch { return false; }
 });

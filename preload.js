@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('api', {
     upload: (opts) => ipcRenderer.invoke('sftp:upload', opts),
     sendFile: (opts) => ipcRenderer.invoke('sftp:sendFile', opts),
     getFile: (opts) => ipcRenderer.invoke('sftp:getFile', opts),
+    sendDir: (opts) => ipcRenderer.invoke('sftp:sendDir', opts),
+    getDir: (opts) => ipcRenderer.invoke('sftp:getDir', opts),
+    exists: (opts) => ipcRenderer.invoke('sftp:exists', opts),
   },
   local: {
     home: () => ipcRenderer.invoke('local:home'),
@@ -52,6 +55,7 @@ contextBridge.exposeInMainWorld('api', {
     mkdir: (opts) => ipcRenderer.invoke('local:mkdir', opts),
     rename: (opts) => ipcRenderer.invoke('local:rename', opts),
     delete: (opts) => ipcRenderer.invoke('local:delete', opts),
+    exists: (opts) => ipcRenderer.invoke('local:exists', opts),
   },
   dialog: {
     pickKey: () => ipcRenderer.invoke('dialog:pickKey'),
