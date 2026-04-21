@@ -476,10 +476,14 @@ function openDialog(opts) {
 
     if (opts.prompt) {
       inputWrap.hidden = false;
+      // Toggle password mode per call so subsequent prompts are plain text
+      // again (sticky type would surprise the next caller).
+      input.type = opts.passwordInput ? 'password' : 'text';
       input.value = opts.defaultValue || '';
       setTimeout(() => { input.focus(); input.select(); }, 40);
     } else {
       inputWrap.hidden = true;
+      input.type = 'text';
       setTimeout(() => btnOk.focus(), 40);
     }
 
@@ -514,6 +518,7 @@ function showPrompt(message, defaultValue = '', opts = {}) {
     defaultValue,
     okText: opts.okText || 'OK',
     cancelText: opts.cancelText,
+    passwordInput: !!opts.passwordInput,
   });
 }
 
@@ -734,6 +739,75 @@ function effectiveStartPath(server) {
   return p;
 }
 
+// Maps the raw ssh2/Node error string into something a human can act on.
+// Returns three flavours so we can use different copy in the terminal vs.
+// the toast (terminal has space for a hint line; toasts must be short).
+function humanizeSshError(raw) {
+  const msg = String(raw || '').toLowerCase();
+  if (msg.includes('all configured authentication methods failed') || msg.includes('authentication failed')) {
+    return {
+      toast: 'Wrong password or key — auth rejected',
+      term: 'AUTH REJECTED · password or key changed on the server',
+      hint: 'open the endpoint and re-enter the password / re-pick the key',
+    };
+  }
+  if (msg.includes('econnrefused')) {
+    return {
+      toast: 'Connection refused — port closed or sshd down',
+      term: 'CONNECTION REFUSED · nothing listening on that port',
+      hint: 'check the host:port and that sshd is running',
+    };
+  }
+  if (msg.includes('etimedout') || msg.includes('timed out')) {
+    return {
+      toast: 'Timed out — host unreachable',
+      term: 'TIMEOUT · host did not answer in 20 s',
+      hint: 'check VPN, firewall, or DNS',
+    };
+  }
+  if (msg.includes('enotfound') || msg.includes('getaddrinfo') || msg.includes('eai_again')) {
+    return {
+      toast: 'Host not found (DNS)',
+      term: 'DNS FAILURE · could not resolve hostname',
+      hint: 'check spelling or your network',
+    };
+  }
+  if (msg.includes('ehostunreach') || msg.includes('enetunreach')) {
+    return {
+      toast: 'Network unreachable',
+      term: 'NETWORK UNREACHABLE · no route to host',
+      hint: 'check VPN / interface',
+    };
+  }
+  if (msg.includes('handshake failed') || msg.includes('protocol version')) {
+    return {
+      toast: 'SSH handshake failed',
+      term: 'HANDSHAKE FAILED · server speaks a different SSH dialect',
+      hint: 'verify port, may be hitting a non-SSH service',
+    };
+  }
+  if (msg.includes('failed to read key')) {
+    return {
+      toast: 'Cannot read private key',
+      term: 'KEY READ FAILED · ' + raw,
+      hint: 'check the path and read permission',
+    };
+  }
+  if (msg.includes('key parse') || msg.includes('encrypted private')) {
+    return {
+      toast: 'Key needs a passphrase or is unsupported',
+      term: 'KEY PARSE FAILED · the file is encrypted or not in OpenSSH format',
+      hint: 'set the passphrase in the endpoint config',
+    };
+  }
+  // Fallback: prefix CONNECTION FAILED but keep the raw upstream text.
+  return {
+    toast: 'Connection failed: ' + raw,
+    term: 'CONNECTION FAILED · ' + raw,
+    hint: '',
+  };
+}
+
 async function connectServer(server, options = {}) {
   const { allowDuplicate = false } = options;
 
@@ -831,17 +905,20 @@ async function connectServer(server, options = {}) {
     sess.connected = false;
     setStatus(sess, 'fail');
     renderServerList();
-    term.writeln('\x1b[38;5;203m✗ CONNECTION FAILED · ' + (e.message || e) + '\x1b[0m');
-    toast('Connection failed: ' + (e.message || e), 'err');
+    const friendly = humanizeSshError(e.message || String(e));
+    term.writeln('\x1b[38;5;203m✗ ' + friendly.term + '\x1b[0m');
+    if (friendly.hint) term.writeln('\x1b[38;5;244m  ' + friendly.hint + '\x1b[0m');
+    toast(friendly.toast, 'err');
     return;
   }
 
   const off1 = window.api.ssh.onData(sessionId, data => term.write(data));
   const off2 = window.api.ssh.onClose(sessionId, () => {
     term.writeln('\r\n\x1b[38;5;244m── LINK SEVERED ──\x1b[0m');
-    setStatus(sess, 'fail');
     sess.connecting = false;
     sess.connected = false;
+    setStatus(sess, 'fail');
+    stopMonitor(sess);   // halt polling so we don't spam dead exec calls
     renderTabs();
     renderServerList();
     updateStats();
@@ -880,11 +957,14 @@ async function connectServer(server, options = {}) {
     if (inp) inp.value = remoteStart;
   }
 
-  // If the user already toggled to SFTP while we were warming up, the remote
-  // pane is showing "AWAITING LINK" — refresh it now.
+  // If the user already toggled away from the terminal while we were warming
+  // up, the destination view is showing its skeleton/awaiting state — refresh
+  // it now that the SSH session is live.
   if (sess.view === 'sftp') {
     loadRemote(sessionId);
     loadLocal(sessionId);
+  } else if (sess.view === 'monitor') {
+    startMonitor(sessionId);
   }
 }
 
@@ -893,6 +973,13 @@ function setStatus(sess, kind) {
   sess.statusDotEl.classList.remove('fail', 'warn');
   if (kind === 'fail') sess.statusDotEl.classList.add('fail');
   if (kind === 'warn') sess.statusDotEl.classList.add('warn');
+  // Reconnect button visibility is driven by a class on the wrap — only the
+  // 'fail' (link severed / connect failed) state shows it. 'warn' is the
+  // normal "still handshaking" state, no point showing reconnect there.
+  if (sess.wrap) {
+    sess.wrap.classList.toggle('session-offline', kind === 'fail');
+    sess.wrap.classList.toggle('session-reconnecting', kind === 'warn' && sess.connecting && !sess.connected);
+  }
 }
 
 function renderTabs() {
@@ -946,9 +1033,48 @@ function renderTabs() {
   }
 }
 
+// Re-establish SSH on the same session. Reuses the existing terminal +
+// IPC handler subscriptions (they're keyed by sessionId, so the new
+// connection's data flows into the same xterm). Only allowed when the
+// session is in a clean offline state — clicking spam-reconnect during a
+// live link or in-flight handshake is a no-op.
+async function reconnectSession(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || sess.connecting || sess.connected) return;
+  if (!sess.term) return;
+  sess.connecting = true;
+  setStatus(sess, 'warn');
+  renderServerList();
+  sess.term.writeln('\r\n\x1b[38;5;244m── RE-ESTABLISHING LINK ──\x1b[0m');
+  try {
+    await window.api.ssh.connect({
+      sessionId,
+      server: sess.server,
+      cols: sess.term.cols,
+      rows: sess.term.rows,
+    });
+    sess.connecting = false;
+    sess.connected = true;
+    setStatus(sess, 'ok');
+    renderServerList();
+    renderTabs();
+    sess.term.writeln('\x1b[38;5;120m✓ LINK RESTORED\x1b[0m');
+    if (sess.view === 'monitor') { resetMonitorSkeleton(sess); startMonitor(sessionId); }
+    else if (sess.view === 'sftp') { loadLocal(sessionId); loadRemote(sessionId); }
+  } catch (e) {
+    sess.connecting = false;
+    sess.connected = false;
+    setStatus(sess, 'fail');
+    renderServerList();
+    sess.term.writeln('\x1b[38;5;203m✗ RECONNECT FAILED · ' + (e.message || e) + '\x1b[0m');
+    toast('Reconnect failed: ' + (e.message || e), 'err');
+  }
+}
+
 async function disconnectSession(sessionId) {
   const s = activeSessions.get(sessionId);
   if (!s) return;
+  stopMonitor(s);
   s.cleanup.forEach(fn => { try { fn && fn(); } catch (e) {} });
   try { s.term && s.term.dispose(); } catch (e) {}
   try { s.wrap && s.wrap.remove(); } catch (e) {}
@@ -999,14 +1125,85 @@ function renderWorkspace(sessionId) {
       <div class="mode-seg">
         <button class="seg active" data-mode="term">TERMINAL</button>
         <button class="seg" data-mode="sftp">SFTP</button>
+        <button class="seg" data-mode="monitor">PANEL</button>
       </div>
       <div class="view-info">
+        <button class="reconnect-btn" data-act="reconnect" title="Re-establish link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square">
+            <path d="M3 12a9 9 0 0 1 16-5.7"/><path d="M19 3v5h-5"/>
+            <path d="M21 12a9 9 0 0 1-16 5.7"/><path d="M5 21v-5h5"/>
+          </svg>
+          <span>RECONNECT</span>
+        </button>
         <span class="info-dot warn"></span>
-        <span>${escapeHtml(sess.server.username)}@${escapeHtml(sess.server.host)}:${sess.server.port || 22}</span>
+        <span class="view-host">${escapeHtml(sess.server.username)}@${escapeHtml(sess.server.host)}:${sess.server.port || 22}</span>
       </div>
     </div>
     <div class="view-body">
       <div class="term-pane"></div>
+      <div class="monitor-pane" hidden>
+        <div class="mon-grid">
+          <section class="mon-card mon-cpu loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>CPU</span><span class="mon-sub"></span></header>
+            <div class="mon-big"><span class="mon-val">—</span><span class="mon-unit">%</span></div>
+            <div class="mon-bar"><div class="mon-bar-fill"></div></div>
+            <div class="mon-meta"></div>
+          </section>
+          <section class="mon-card mon-mem loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>MEMORY</span><span class="mon-sub"></span></header>
+            <div class="mon-big"><span class="mon-val">—</span><span class="mon-unit">%</span></div>
+            <div class="mon-bar"><div class="mon-bar-fill"></div></div>
+            <div class="mon-meta"></div>
+          </section>
+          <section class="mon-card mon-disk loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>DISK</span><span class="mon-sub"></span></header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+          <section class="mon-card mon-docker loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>DOCKER CONTAINERS</span><span class="mon-sub"></span></header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+          <section class="mon-card mon-ports loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>LISTENING PORTS</span><span class="mon-sub"></span></header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+          <section class="mon-card mon-sites loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>NGINX SITES</span><span class="mon-sub"></span></header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+          <section class="mon-card mon-fw loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head">
+              <span>FIREWALL · INPUT</span>
+              <span class="mon-sub"></span>
+            </header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+          <section class="mon-card mon-vols loading">
+            <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+            <header class="mon-head"><span>DOCKER VOLUMES</span><span class="mon-sub"></span></header>
+            <div class="mon-list">
+              <div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>
+            </div>
+          </section>
+        </div>
+      </div>
       <div class="sftp-pane" hidden>
         <div class="sftp-split">
           <section class="fs-pane local-pane">
@@ -1065,9 +1262,11 @@ function renderWorkspace(sessionId) {
   sess.wrap = wrap;
   sess.termEl = wrap.querySelector('.term-pane');
   sess.sftpEl = wrap.querySelector('.sftp-pane');
+  sess.monitorEl = wrap.querySelector('.monitor-pane');
   sess.localPaneEl = wrap.querySelector('.local-pane');
   sess.remotePaneEl = wrap.querySelector('.remote-pane');
   sess.statusDotEl = wrap.querySelector('.info-dot');
+  wrap.querySelector('.reconnect-btn').addEventListener('click', () => reconnectSession(sessionId));
 
   // Mode toggle
   wrap.querySelectorAll('.mode-seg .seg').forEach(b => {
@@ -1076,12 +1275,17 @@ function renderWorkspace(sessionId) {
       wrap.querySelectorAll('.mode-seg .seg').forEach(x => x.classList.toggle('active', x === b));
       sess.termEl.hidden = mode !== 'term';
       sess.sftpEl.hidden = mode !== 'sftp';
+      sess.monitorEl.hidden = mode !== 'monitor';
       sess.view = mode;
       if (mode === 'term') {
+        stopMonitor(sess);
         setTimeout(() => { try { sess.fitAddon && sess.fitAddon.fit(); } catch (e) {} }, 50);
-      } else {
+      } else if (mode === 'sftp') {
+        stopMonitor(sess);
         loadLocal(sessionId);
         loadRemote(sessionId);
+      } else if (mode === 'monitor') {
+        startMonitor(sessionId);
       }
     });
   });
@@ -1705,6 +1909,1591 @@ function showOverwriteDialog(name, dstDir, srcSide) {
   });
 }
 
+// ─── Monitor tab ───
+// Polls system + docker metrics over the existing SSH connection via
+// ssh.exec. Two cadences:
+//   fast (2 s):  /proc/stat + /proc/meminfo — trivial read, always cheap
+//   slow (8 s):  df, docker stats, docker system df -v — heavier (docker
+//                stats samples for 1 s, so 8 s gives it headroom)
+// CPU utilisation needs two /proc/stat samples to compute, so first tick
+// only primes the baseline; real number appears on the second tick.
+//
+// Commands are wrapped in `2>/dev/null || true` so a missing docker, missing
+// lscpu, etc., don't spew stderr into the output. We still check exit code
+// separately via the ssh:exec result to decide whether to show a placeholder.
+
+function startMonitor(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.connected) {
+    // Session not ready yet — show waiting state; the mode-toggle re-enters
+    // this once connected.
+    if (sess && sess.monitorEl) {
+      sess.monitorEl.querySelector('.mon-cpu .mon-val').textContent = '—';
+    }
+    return;
+  }
+  sess.monitor = sess.monitor || { timers: [], prevCpu: null, cpuInfo: null, active: false };
+  if (sess.monitor.active) return;
+  sess.monitor.active = true;
+
+  const fast = () => { if (sess.monitor.active) pollFast(sessionId).catch(() => {}); };
+  const slow = () => { if (sess.monitor.active) pollSlow(sessionId).catch(() => {}); };
+
+  // Prime once immediately, then interval. Static info (CPU model, host) is
+  // only fetched on first start — doesn't change mid-session.
+  if (!sess.monitor.cpuInfo) pollStatic(sessionId).catch(() => {});
+  fast();
+  slow();
+  sess.monitor.timers.push(setInterval(fast, 2000));
+  sess.monitor.timers.push(setInterval(slow, 8000));
+
+  // One-time card click bindings (drilldowns). Idempotent via _drillBound.
+  if (!sess.monitorEl._drillBound) {
+    sess.monitorEl._drillBound = true;
+    sess.monitorEl.querySelector('.mon-cpu').addEventListener('click', () =>
+      showProcessesModal(sessionId, 'cpu'));
+    sess.monitorEl.querySelector('.mon-mem').addEventListener('click', () =>
+      showProcessesModal(sessionId, 'mem'));
+    sess.monitorEl.querySelector('.mon-disk').addEventListener('click', (e) => {
+      // If the click landed on a row inside the card, drill into that mount.
+      const row = e.target.closest('.mon-row');
+      const mount = row && row.dataset.mount;
+      showDiskModal(sessionId, mount || '/');
+    });
+  }
+}
+
+function stopMonitor(sess) {
+  if (!sess || !sess.monitor) return;
+  sess.monitor.timers.forEach(clearInterval);
+  sess.monitor.timers = [];
+  sess.monitor.active = false;
+}
+
+// Wipe rendered values back to the initial loading state. Called on
+// reconnect (data is stale) so skeletons show until fresh poll lands.
+function resetMonitorSkeleton(sess) {
+  if (!sess || !sess.monitorEl) return;
+  ['cpu', 'mem'].forEach(k => {
+    const c = sess.monitorEl.querySelector('.mon-' + k);
+    if (!c) return;
+    c.classList.add('loading');
+    c.classList.remove('hot', 'warm');
+    const v = c.querySelector('.mon-val'); if (v) v.textContent = '—';
+    const b = c.querySelector('.mon-bar-fill'); if (b) b.style.width = '0';
+    const m = c.querySelector('.mon-meta'); if (m) m.textContent = '';
+  });
+  ['disk', 'docker', 'ports', 'sites', 'fw', 'vols'].forEach(k => {
+    const c = sess.monitorEl.querySelector('.mon-' + k);
+    if (!c) return;
+    c.classList.add('loading');
+    const list = c.querySelector('.mon-list');
+    if (list) list.innerHTML = '<div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>';
+    const sub = c.querySelector('.mon-sub');
+    if (sub) sub.textContent = '';
+  });
+  if (sess.monitor) {
+    sess.monitor.prevCpu = null;        // re-prime CPU baseline
+    sess.monitor.attempts = {};         // re-grant the empty-poll grace
+    sess.monitor.seen = {};             // drop stickiness — server may have changed
+  }
+}
+
+async function execOut(sessionId, cmd, timeoutMs) {
+  try {
+    const r = await window.api.ssh.exec({ sessionId, cmd, timeoutMs });
+    return r;
+  } catch (e) {
+    return { stdout: '', stderr: String(e.message || e), code: -1 };
+  }
+}
+
+async function pollStatic(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.monitorEl) return;
+
+  const r = await execOut(sessionId,
+    "lscpu 2>/dev/null || cat /proc/cpuinfo 2>/dev/null | head -30; echo '---'; uname -srm 2>/dev/null; echo '---'; (cat /etc/os-release 2>/dev/null | grep PRETTY_NAME || true)",
+    5000);
+  const [cpuRaw, kernelRaw, osRaw] = (r.stdout || '').split('---');
+
+  // Try lscpu-style ("Model name: Intel ..."), fallback to cpuinfo.
+  let model = null, cores = null, mhz = null;
+  const cpuText = cpuRaw || '';
+  const m1 = cpuText.match(/Model name:\s*(.+)/i);
+  if (m1) model = m1[1].trim();
+  else {
+    const m2 = cpuText.match(/model name\s*:\s*(.+)/);
+    if (m2) model = m2[1].trim();
+  }
+  const cm = cpuText.match(/^CPU\(s\):\s*(\d+)/mi) || cpuText.match(/^cpu cores\s*:\s*(\d+)/mi);
+  if (cm) cores = parseInt(cm[1], 10);
+  // Fallback: count processor lines in cpuinfo.
+  if (!cores) {
+    const procs = (cpuText.match(/^processor\s*:/gm) || []).length;
+    if (procs) cores = procs;
+  }
+  const mh = cpuText.match(/CPU MHz:\s*([\d.]+)/i) || cpuText.match(/cpu MHz\s*:\s*([\d.]+)/);
+  if (mh) mhz = parseFloat(mh[1]);
+
+  sess.monitor.cpuInfo = { model, cores, mhz };
+
+  const parts = [];
+  if (model) parts.push(model);
+  if (cores) parts.push(`${cores} core${cores > 1 ? 's' : ''}`);
+  if (mhz) parts.push(`${(mhz / 1000).toFixed(2)} GHz`);
+  sess.monitorEl.querySelector('.mon-cpu .mon-meta').textContent = parts.join(' · ') || '—';
+
+  const kernel = (kernelRaw || '').trim();
+  const osLine = ((osRaw || '').match(/PRETTY_NAME="?([^"\n]+)/) || [])[1] || '';
+  const sub = [osLine, kernel].filter(Boolean).join(' · ');
+  sess.monitorEl.querySelector('.mon-cpu .mon-sub').textContent = sub;
+}
+
+async function pollFast(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.monitorEl) return;
+
+  const r = await execOut(sessionId,
+    "head -1 /proc/stat 2>/dev/null; echo '---'; cat /proc/meminfo 2>/dev/null",
+    4000);
+  const [cpuRaw, memRaw] = (r.stdout || '').split('---');
+
+  // ── CPU % ────────────────────────────────────────
+  // /proc/stat top line: cpu user nice system idle iowait irq softirq steal ...
+  const nums = (cpuRaw || '').trim().split(/\s+/).slice(1).map(Number);
+  if (nums.length >= 4) {
+    const idle = (nums[3] || 0) + (nums[4] || 0);           // idle + iowait
+    const total = nums.reduce((a, b) => a + (b || 0), 0);
+    const prev = sess.monitor.prevCpu;
+    sess.monitor.prevCpu = { idle, total };
+    if (prev) {
+      const dt = total - prev.total;
+      const di = idle - prev.idle;
+      const pct = dt > 0 ? Math.max(0, Math.min(100, 100 * (1 - di / dt))) : 0;
+      renderBar(sess.monitorEl.querySelector('.mon-cpu'), pct);
+    }
+  }
+
+  // ── Memory ───────────────────────────────────────
+  if (memRaw) {
+    const get = (k) => {
+      const m = memRaw.match(new RegExp(`^${k}:\\s+(\\d+)`, 'm'));
+      return m ? parseInt(m[1], 10) * 1024 : null;  // kB → bytes
+    };
+    const total = get('MemTotal');
+    const avail = get('MemAvailable') ?? (() => {
+      // Fallback for very old kernels without MemAvailable.
+      const free = get('MemFree') || 0;
+      const buff = get('Buffers') || 0;
+      const cache = get('Cached') || 0;
+      return free + buff + cache;
+    })();
+    if (total) {
+      const used = total - (avail || 0);
+      const pct = (used / total) * 100;
+      const card = sess.monitorEl.querySelector('.mon-mem');
+      renderBar(card, pct);
+      card.querySelector('.mon-meta').textContent = `${humanSize(used)} / ${humanSize(total)}`;
+    }
+  }
+}
+
+async function pollSlow(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.monitorEl) return;
+
+  // Run these in parallel — each is independent and slow commands
+  // (docker stats samples for 1 s) shouldn't block faster ones.
+  const [dfR, dpsR, dpsAllR, dvolR, dmapR, portsR, sitesR, fwR] = await Promise.all([
+    execOut(sessionId, "df -h -P 2>/dev/null | awk 'NR==1 || ($1 !~ /tmpfs|devtmpfs|overlay|udev/)'", 5000),
+    execOut(sessionId, "docker stats --no-stream --format '{{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}\\t{{.MemPerc}}' 2>/dev/null", 10000),
+    // ALL containers (running + stopped). Status text starts with "Up" when
+    // running ("Up 3 days"), or "Exited"/"Created"/"Restarting" otherwise.
+    // Ports column is comma-separated host→guest publishings. Last three
+    // columns are docker-compose labels (empty if container wasn't created
+    // by compose) — we use them to show a project dir + offer rebuild.
+    execOut(sessionId,
+      "docker ps -a --format " +
+      "'{{.Names}}\\t{{.Status}}\\t{{.Image}}\\t{{.Ports}}\\t" +
+      "{{.Label \"com.docker.compose.project.working_dir\"}}\\t" +
+      "{{.Label \"com.docker.compose.service\"}}\\t" +
+      "{{.Label \"com.docker.compose.project.config_files\"}}' 2>/dev/null",
+      5000),
+    execOut(sessionId, "docker system df -v --format '{{json .}}' 2>/dev/null", 10000),
+    // Container → volume mapping. {{.Mounts}} prints comma-separated mount
+    // sources; named volumes appear as a bare name, bind mounts as absolute
+    // paths (we filter those out by leading slash).
+    execOut(sessionId, "docker ps -a --format '{{.Names}}|{{.Mounts}}' 2>/dev/null", 5000),
+    // Listening sockets. ss -tlnp / -ulnp give TCP/UDP listeners. The
+    // "users:" column with PID/process needs root to see other users'
+    // processes. Try the privileged path (uses cached sudo password if the
+    // user enabled sudo this session) and fall back to plain ss otherwise.
+    // Wrapped in withPath because SSH non-interactive shells often miss
+    // /usr/sbin/ from PATH and ss "not found" silently.
+    execOut(sessionId,
+      withPath(
+        `(${withSudo('ss -tlnpH', sessionId)} 2>/dev/null || ss -tlnpH 2>/dev/null); ` +
+        `echo '___UDP___'; ` +
+        `(${withSudo('ss -ulnpH', sessionId)} 2>/dev/null || ss -ulnpH 2>/dev/null)`
+      ),
+      6000),
+    // nginx sites: scan both classic Debian layout and conf.d. Per file
+    // we emit the FULL path (so click→editor opens the right file) plus
+    // server_name and listen lines.
+    execOut(sessionId,
+      "for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do " +
+      "[ -f \"$f\" ] || continue; " +
+      "echo \"=== $f\"; " +
+      "grep -hE '^[[:space:]]*(server_name|listen)[[:space:]]' \"$f\" 2>/dev/null | sed 's/^[[:space:]]*//; s/;.*//'; " +
+      "done 2>/dev/null; " +
+      "[ -f /etc/nginx/nginx.conf ] && echo '___MAIN___/etc/nginx/nginx.conf'",
+      5000),
+    // Firewall rules — INPUT chain only (most relevant for "who can reach
+    // me"). -S spits rules in iptables-restore syntax which is easy to
+    // parse. Uses cached sudo password if available; otherwise sudo -n
+    // (NOPASSWD); otherwise plain (usually empty for unprivileged users).
+    // withPath because iptables typically lives in /usr/sbin or /sbin,
+    // which non-interactive SSH shells often skip.
+    execOut(sessionId,
+      withPath(
+        `(${withSudo('iptables -S INPUT', sessionId)} 2>/dev/null || iptables -S INPUT 2>/dev/null)`
+      ),
+      5000),
+  ]);
+
+  // Build {volumeName → [containerNames]} AND {containerName → [volumes]}
+  // from one pass over docker ps output. Used both in renderVolumes (which
+  // containers use a vol) and renderDocker (which vols a container uses).
+  const volMap = new Map();
+  const ctrVolMap = new Map();
+  (dmapR.stdout || '').split('\n').filter(Boolean).forEach(line => {
+    const [name, mounts] = line.split('|');
+    if (!name || !mounts) return;
+    mounts.split(',').map(s => s.trim()).filter(Boolean).forEach(m => {
+      if (m.startsWith('/')) return;  // bind mount
+      if (!volMap.has(m)) volMap.set(m, []);
+      volMap.get(m).push(name);
+      if (!ctrVolMap.has(name)) ctrVolMap.set(name, []);
+      ctrVolMap.get(name).push(m);
+    });
+  });
+
+  // Merge `docker ps -a` (canonical list of all containers) with `docker stats`
+  // (resource numbers, only running). Stopped containers show status only.
+  const statsByName = new Map();
+  (dpsR.stdout || '').split('\n').filter(Boolean).forEach(line => {
+    const [name, cpu, memUsage, memPct] = line.split('\t');
+    statsByName.set(name, { cpu, memUsage, memPct });
+  });
+  const containers = (dpsAllR.stdout || '').split('\n').filter(Boolean).map(line => {
+    const cols = line.split('\t');
+    const [name, status, image, portsRaw, projDir, service, configFiles] = cols;
+    const isRunning = (status || '').startsWith('Up');
+    const stats = isRunning ? (statsByName.get(name) || {}) : {};
+    return {
+      name,
+      status,
+      image,
+      ports: summarizePorts(portsRaw),
+      isRunning,
+      // Compose-managed if working_dir label is present; service/configFiles
+      // come from the same Docker Compose spec labels.
+      compose: projDir ? {
+        dir: projDir,
+        service: service || '',
+        // config_files can be a comma-list when multiple `-f file.yml` were
+        // passed; first one is "the" compose file for our links.
+        configFile: (configFiles || '').split(',')[0] || '',
+      } : null,
+      // Named volumes attached to this container (bind mounts excluded).
+      volumes: ctrVolMap.get(name) || [],
+      ...stats,
+    };
+  });
+
+  renderDisk(sess, dfR.stdout || '');
+  renderDocker(sess, containers, dpsAllR.code, sessionId);
+  renderPorts(sess, portsR.stdout || '', portsR.code, sessionId);
+  renderSites(sess, sitesR.stdout || '', sitesR.code, sessionId);
+  renderFirewall(sess, fwR.stdout || '', fwR.code, sessionId);
+  renderVolumes(sess, dvolR.stdout || '', dvolR.code, volMap, sessionId);
+}
+
+// "0.0.0.0:8080->80/tcp, [::]:8080->80/tcp, 0.0.0.0:443->443/tcp"
+//   → "8080, 443"  (host-side ports only, deduped, sorted)
+function summarizePorts(s) {
+  if (!s) return '';
+  const set = new Set();
+  s.split(',').forEach(p => {
+    const m = p.trim().match(/:(\d+)->/);
+    if (m) set.add(m[1]);
+  });
+  return [...set].sort((a, b) => Number(a) - Number(b)).join(', ');
+}
+
+function renderBar(cardEl, pct) {
+  const v = cardEl.querySelector('.mon-val');
+  const bar = cardEl.querySelector('.mon-bar-fill');
+  v.textContent = pct.toFixed(1);
+  bar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  cardEl.classList.toggle('hot', pct >= 85);
+  cardEl.classList.toggle('warm', pct >= 60 && pct < 85);
+  cardEl.classList.remove('loading');
+}
+
+function renderDisk(sess, raw) {
+  const card = sess.monitorEl.querySelector('.mon-disk');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  card.classList.remove('loading');
+  const lines = raw.split('\n').filter(Boolean);
+  // Header: "Filesystem Size Used Avail Use% Mounted on"
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].trim().split(/\s+/);
+    if (cols.length < 6) continue;
+    const mount = cols.slice(5).join(' ');  // path may have spaces
+    const pct = parseInt(cols[4], 10);
+    rows.push({ mount, size: cols[1], used: cols[2], pct: isNaN(pct) ? 0 : pct });
+  }
+  if (!rows.length) { list.innerHTML = '<div class="mon-empty">no data</div>'; sub.textContent = ''; return; }
+  sub.textContent = `${rows.length} mount${rows.length > 1 ? 's' : ''}`;
+  list.innerHTML = rows.map(r => `
+    <div class="mon-row${r.pct >= 85 ? ' hot' : r.pct >= 60 ? ' warm' : ''}" data-mount="${escapeHtml(r.mount)}">
+      <div class="mon-row-line">
+        <span class="mon-row-name">${escapeHtml(r.mount)}</span>
+        <span class="mon-row-val">${r.pct}% · ${escapeHtml(r.used)} / ${escapeHtml(r.size)}</span>
+      </div>
+      <div class="mon-row-bar"><div class="mon-row-fill" style="width:${r.pct}%"></div></div>
+    </div>
+  `).join('');
+}
+
+function renderDocker(sess, containers, code, sessionId) {
+  const card = sess.monitorEl.querySelector('.mon-docker');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  card.classList.remove('loading');
+  if (!containers.length) {
+    list.innerHTML = `<div class="mon-empty">${code === 0 ? 'no containers' : 'docker not available'}</div>`;
+    sub.textContent = '';
+    return;
+  }
+  // Sort: running first (alphabetical inside), then stopped.
+  containers.sort((a, b) => {
+    if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  const runningCount = containers.filter(c => c.isRunning).length;
+  const stoppedCount = containers.length - runningCount;
+  sub.textContent = `${runningCount} running${stoppedCount ? ` · ${stoppedCount} stopped` : ''}`;
+
+  list.innerHTML = containers.map(c => {
+    const stateCls = c.isRunning ? 'running' : 'stopped';
+    const statsLine = c.isRunning
+      ? `${escapeHtml(c.cpu || '—')} CPU · ${escapeHtml(c.memUsage || '—')}`
+      : escapeHtml(c.status || 'stopped');
+    const portsTag = c.ports ? ` · <span class="mon-ctr-ports">:${escapeHtml(c.ports)}</span>` : '';
+    const metaLine = c.isRunning
+      ? escapeHtml(c.status || '') + portsTag
+      : escapeHtml(c.image || '') + portsTag;
+
+    // Two extra meta rows below the container's main line:
+    //  1) compose project + clickable file shortcuts (.env / compose / Dockerfile)
+    //  2) named volumes attached to this container — clickable to scroll +
+    //     flash the matching row in DOCKER VOLUMES card
+    let projLine = '';
+    if (c.compose && c.compose.dir) {
+      const dir = c.compose.dir;
+      const enc = (p) => encodeURIComponent(p);
+      const paths = [];
+      if (c.compose.configFile) paths.push(c.compose.configFile);
+      else paths.push(joinPath(dir, 'docker-compose.yml'));
+      paths.push(joinPath(dir, '.env'));
+      paths.push(joinPath(dir, 'Dockerfile'));
+      const seen = new Set();
+      const links = paths.filter(p => (seen.has(p) ? false : (seen.add(p), true)))
+        .map(p => {
+          const label = p.split('/').pop();
+          return `<a class="mon-ctr-file" data-path="${enc(p)}">${escapeHtml(label)}</a>`;
+        }).join(' · ');
+      projLine = `
+        <div class="mon-ctr-proj">
+          <span class="mon-ctr-proj-icon">▸</span>
+          <span class="mon-ctr-proj-dir" title="Project working directory">${escapeHtml(dir)}</span>
+          <span class="mon-ctr-proj-files">${links}</span>
+        </div>
+      `;
+    }
+    let volsLine = '';
+    if (c.volumes && c.volumes.length) {
+      const vlinks = c.volumes.map(v =>
+        `<a class="mon-ctr-vol" data-vol="${escapeHtml(v)}">${escapeHtml(v)}</a>`
+      ).join(' · ');
+      volsLine = `
+        <div class="mon-ctr-vols">
+          <span class="mon-ctr-proj-icon">⊟</span>
+          <span class="mon-ctr-vols-label">vol:</span>
+          <span class="mon-ctr-vols-list">${vlinks}</span>
+        </div>
+      `;
+    }
+
+    // Always 4 slots: power(start/stop) · restart · rebuild · export.
+    // Slots that don't apply to this container render as invisible spacers
+    // so every row's button cluster occupies the same width and the
+    // buttons sit at the same X across the whole list.
+    const slot = (html) => html || '<span class="row-btn-spacer"></span>';
+    const powerBtn = c.isRunning
+      ? '<button class="row-btn" data-act="stop"  title="Stop">◼</button>'
+      : '<button class="row-btn" data-act="start" title="Start">▶</button>';
+    const restartBtn = c.isRunning
+      ? '<button class="row-btn" data-act="restart" title="Restart">↻</button>'
+      : '';
+    const rebuildBtn = c.compose
+      ? '<button class="row-btn" data-act="rebuild" title="docker compose up -d --build">⚙</button>'
+      : '';
+    const exportBtn = '<button class="row-btn" data-act="export" title="Export filesystem">↓</button>';
+    const actions = `${slot(powerBtn)}${slot(restartBtn)}${slot(rebuildBtn)}${slot(exportBtn)}`;
+
+    return `
+      <div class="mon-row mon-ctr-row mon-ctr-${stateCls}" data-name="${escapeHtml(c.name || '')}">
+        <span class="mon-ctr-dot" title="${c.isRunning ? 'Running' : 'Stopped'}"></span>
+        <div class="mon-ctr-main">
+          <div class="mon-row-line">
+            <span class="mon-row-name">${escapeHtml(c.name || '?')}</span>
+            <span class="mon-row-val">${statsLine}</span>
+          </div>
+          <div class="mon-ctr-meta">${metaLine}</div>
+          ${projLine}
+          ${volsLine}
+        </div>
+        <div class="mon-vol-actions">${actions}</div>
+      </div>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.mon-ctr-row').forEach(row => {
+    const name = row.dataset.name;
+    const ctr = containers.find(c => c.name === name);
+    row.querySelectorAll('.row-btn').forEach(b => {
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const act = b.dataset.act;
+        if (act === 'start')        await containerAction(sessionId, name, 'start');
+        else if (act === 'stop')    await containerAction(sessionId, name, 'stop');
+        else if (act === 'restart') await containerAction(sessionId, name, 'restart');
+        else if (act === 'export')  await exportContainer(sessionId, name);
+        else if (act === 'rebuild' && ctr && ctr.compose) await rebuildContainer(sessionId, ctr);
+      });
+    });
+    // File / dir links → open editor modal. Plain anchor click; SFTP read
+    // happens inside the modal so we can show a loading state.
+    row.querySelectorAll('.mon-ctr-file').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showFileEditor(sessionId, decodeURIComponent(a.dataset.path));
+      });
+    });
+    // Volume links → scroll to matching VOLUMES row + flash highlight.
+    row.querySelectorAll('.mon-ctr-vol').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        flashVolumeRow(activeSessions.get(sessionId), a.dataset.vol);
+      });
+    });
+  });
+}
+
+// Scrolls to + briefly highlights a volume row by name. Used from container
+// rows so user can trace "this container uses these volumes" → see them in
+// the VOLUMES card.
+function flashVolumeRow(sess, volName) {
+  if (!sess || !sess.monitorEl) return;
+  const row = sess.monitorEl.querySelector(`.mon-vol-row[data-vol="${CSS.escape(volName)}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.classList.remove('flash');
+  // Reflow so re-adding the class restarts the CSS animation.
+  void row.offsetWidth;
+  row.classList.add('flash');
+  setTimeout(() => row.classList.remove('flash'), 1400);
+}
+
+// Same trick the other way — clicking a container name in the VOLUMES card.
+function flashContainerRow(sess, ctrName) {
+  if (!sess || !sess.monitorEl) return;
+  const row = sess.monitorEl.querySelector(`.mon-ctr-row[data-name="${CSS.escape(ctrName)}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.classList.remove('flash');
+  void row.offsetWidth;
+  row.classList.add('flash');
+  setTimeout(() => row.classList.remove('flash'), 1400);
+}
+
+// Listening sockets. ss output (no header, -H) is whitespace-separated:
+//   State Recv-Q Send-Q LocalAddress:Port PeerAddress:Port [users:(("proc",pid=N,fd=M))]
+// On non-root SSH the users:(...) column may be empty. We accept that and
+// just leave the process column blank for those rows.
+function renderPorts(sess, raw, code, sessionId) {
+  const card = sess.monitorEl.querySelector('.mon-ports');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  sess.monitor.seen = sess.monitor.seen || {};
+  if (!raw.trim()) {
+    if (sess.monitor.seen.ports) return;  // keep last good render
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.ports = (sess.monitor.attempts.ports || 0) + 1;
+    if (sess.monitor.attempts.ports < 2) return;
+    card.classList.remove('loading');
+    list.innerHTML = `<div class="mon-empty">${code === 0 ? 'no listeners' : 'ss not available'}</div>`;
+    sub.textContent = '';
+    return;
+  }
+  card.classList.remove('loading');
+  const sections = raw.split('___UDP___');
+  const tcpLines = (sections[0] || '').split('\n').filter(Boolean);
+  const udpLines = (sections[1] || '').split('\n').filter(Boolean);
+  const rows = [
+    ...tcpLines.map(l => parsePortLine(l, 'TCP')),
+    ...udpLines.map(l => parsePortLine(l, 'UDP')),
+  ].filter(Boolean);
+  if (!rows.length) {
+    list.innerHTML = '<div class="mon-empty">no listeners</div>';
+    sub.textContent = '';
+    return;
+  }
+  // De-dupe by proto+port (ipv4 + ipv6 dual-stack often shows both).
+  const seen = new Set();
+  const unique = rows.filter(r => {
+    const k = `${r.proto}:${r.port}:${r.proc}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  unique.sort((a, b) => Number(a.port) - Number(b.port));
+  sess.monitor.seen.ports = true;  // sticky from now on
+  sub.textContent = `${unique.length} listener${unique.length > 1 ? 's' : ''}`;
+  // If we still don't see process info after a poll, sudo is probably needed.
+  // Render "use sudo" as a clickable link in the proc column instead of a
+  // dead "unknown" placeholder.
+  const sudoOn = !!sess._sudoPwd;
+  list.innerHTML = unique.map(r => {
+    let procHtml;
+    if (r.proc) {
+      procHtml = `${escapeHtml(r.proc)}${r.pid ? ' <span class="mon-port-pid">#'+r.pid+'</span>' : ''}`;
+    } else if (sudoOn) {
+      procHtml = `<span class="mon-port-noproc">unknown</span>`;
+    } else {
+      procHtml = `<a class="mon-port-sudo" title="Enable sudo for this session">use sudo</a>`;
+    }
+    return `
+      <div class="mon-row mon-port-row" data-port="${escapeHtml(r.port)}" data-proto="${r.proto.toLowerCase()}">
+        <span class="mon-port-proto">${r.proto}</span>
+        <span class="mon-port-num">:${escapeHtml(r.port)}</span>
+        <span class="mon-port-proc" title="${escapeHtml(r.addr)}">${procHtml}</span>
+        <span class="mon-port-chev">▸</span>
+      </div>
+    `;
+  }).join('');
+
+  // Whole row click → firewall menu at the click point. Movement check
+  // (>4 px between down and up) tells "real click" from "drag to select" —
+  // we don't fire the menu mid-selection. We DON'T look at
+  // window.getSelection() because that would block clicks while text is
+  // selected anywhere else on the page.
+  list.querySelectorAll('.mon-port-row').forEach(row => {
+    const port = row.dataset.port;
+    const proto = row.dataset.proto;
+    let dragStartX = 0, dragStartY = 0;
+    row.addEventListener('mousedown', (e) => { dragStartX = e.clientX; dragStartY = e.clientY; });
+    row.addEventListener('click', (e) => {
+      const moved = Math.abs(e.clientX - dragStartX) > 4 || Math.abs(e.clientY - dragStartY) > 4;
+      if (moved) return;
+      // Click on the "use sudo" link → enable sudo, not menu.
+      if (e.target.closest('.mon-port-sudo')) {
+        e.stopPropagation();
+        enableSudo(sessionId);
+        return;
+      }
+      const rect = row.getBoundingClientRect();
+      showFirewallMenu(rect.right, rect.bottom + 2, sessionId, port, proto);
+    });
+  });
+}
+
+function parsePortLine(line, proto) {
+  // ss columns vary; the local-address-and-port is column 4 for tcp/udp,
+  // and the users:(...) trailer is the last column when present.
+  const cols = line.trim().split(/\s+/);
+  if (cols.length < 4) return null;
+  const local = cols[3];
+  const portMatch = local.match(/:(\d+)$/);
+  if (!portMatch) return null;
+  const port = portMatch[1];
+  const addr = local.replace(/:\d+$/, '');
+  // Process: users:(("name",pid=123,fd=4)) — first match is enough.
+  const procMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+  return {
+    proto,
+    port,
+    addr,
+    proc: procMatch ? procMatch[1] : '',
+    pid: procMatch ? procMatch[2] : '',
+  };
+}
+
+// nginx site config blocks parsed from sites-enabled / conf.d. Output of the
+// shell loop is groups of `=== /full/path.conf` followed by raw
+// server_name/listen lines, then optional `___MAIN___/etc/nginx/nginx.conf`.
+function renderSites(sess, raw, code, sessionId) {
+  const card = sess.monitorEl.querySelector('.mon-sites');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  sess.monitor.seen = sess.monitor.seen || {};
+  // Stickiness: once we've ever rendered real data into this card, we never
+  // blank it back out on a transient empty poll — keep the last good
+  // render. A genuinely empty initial state shows after a short grace.
+  if (!raw.trim()) {
+    if (sess.monitor.seen.sites) return;
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.sites = (sess.monitor.attempts.sites || 0) + 1;
+    if (sess.monitor.attempts.sites < 2) return;  // keep skeleton on first poll
+    card.classList.remove('loading');
+    list.innerHTML = `<div class="mon-empty">no nginx sites</div>`;
+    sub.textContent = '';
+    return;
+  }
+  sess.monitor.seen.sites = true;
+  card.classList.remove('loading');
+  const sites = [];
+  let cur = null;
+  let mainConf = '';
+  raw.split('\n').forEach(line => {
+    const main = line.match(/^___MAIN___(.+)/);
+    if (main) { mainConf = main[1]; return; }
+    const m = line.match(/^=== (.+)$/);
+    if (m) {
+      cur = { path: m[1], file: m[1].split('/').pop(), names: [], ports: [] };
+      sites.push(cur);
+      return;
+    }
+    if (!cur) return;
+    const sn = line.match(/^server_name\s+(.+)/);
+    if (sn) {
+      sn[1].split(/\s+/).forEach(n => { if (n && n !== '_') cur.names.push(n); });
+      return;
+    }
+    const ln = line.match(/^listen\s+(.+)/);
+    if (ln) cur.ports.push(ln[1].trim());
+  });
+  if (!sites.length && !mainConf) {
+    list.innerHTML = '<div class="mon-empty">no nginx sites</div>';
+    sub.textContent = '';
+    return;
+  }
+  // sub gets the main config link if we found nginx.conf — clickable.
+  sub.innerHTML = mainConf
+    ? `${sites.length} site${sites.length === 1 ? '' : 's'} · <a class="mon-site-mainconf" data-path="${escapeHtml(mainConf)}">nginx.conf</a>`
+    : `${sites.length} site${sites.length === 1 ? '' : 's'}`;
+  list.innerHTML = sites.map(s => {
+    const portSet = new Set();
+    s.ports.forEach(p => {
+      const m = p.match(/(\d+)/);
+      if (m) portSet.add(m[1] + (/ssl/i.test(p) ? '/ssl' : ''));
+    });
+    const portsStr = [...portSet].sort().join(', ');
+    const namesStr = s.names.length ? s.names.join(', ') : '<span class="mon-vol-orphan">no server_name</span>';
+    return `
+      <div class="mon-row mon-site-row" data-path="${escapeHtml(s.path)}">
+        <div class="mon-row-line">
+          <span class="mon-row-name">${escapeHtml(s.file)}</span>
+          <span class="mon-row-val">${escapeHtml(portsStr)}</span>
+        </div>
+        <div class="mon-vol-users">${namesStr}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Bindings: row click → editor; sub-link → main nginx.conf editor.
+  list.querySelectorAll('.mon-site-row').forEach(row => {
+    row.addEventListener('click', () => showFileEditor(sessionId, row.dataset.path));
+  });
+  if (mainConf) {
+    const mc = sub.querySelector('.mon-site-mainconf');
+    if (mc) mc.addEventListener('click', (e) => { e.stopPropagation(); showFileEditor(sessionId, mc.dataset.path); });
+  }
+}
+
+// ─── Firewall (iptables INPUT chain) ───
+// Parses `iptables -S INPUT` output. Each line is a rule in restore-syntax,
+// e.g. "-A INPUT -p tcp -m tcp --dport 80 -j DROP". We render DROP/REJECT
+// rules with a × to delete; the policy line ("-P INPUT ACCEPT") gets shown
+// as the chain header.
+function renderFirewall(sess, raw, code, sessionId) {
+  const card = sess.monitorEl.querySelector('.mon-fw');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  sess.monitor.seen = sess.monitor.seen || {};
+  if (!raw.trim()) {
+    if (sess.monitor.seen.fw) return;  // keep last good render
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.fw = (sess.monitor.attempts.fw || 0) + 1;
+    if (sess.monitor.attempts.fw < 2) return;
+    card.classList.remove('loading');
+    const sudoOn = !!sess._sudoPwd;
+    list.innerHTML = sudoOn
+      ? `<div class="mon-empty">no rules</div>`
+      : `<div class="mon-empty">iptables not visible · <a class="mon-port-sudo mon-fw-sudo">use sudo</a></div>`;
+    sub.textContent = '';
+    if (!sudoOn) {
+      list.querySelector('.mon-fw-sudo').addEventListener('click', () => enableSudo(sessionId));
+    }
+    return;
+  }
+  sess.monitor.seen.fw = true;
+  card.classList.remove('loading');
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  let policy = '';
+  const rules = [];
+  lines.forEach(l => {
+    if (l.startsWith('-P INPUT')) {
+      policy = l.slice('-P INPUT '.length);
+      return;
+    }
+    if (l.startsWith('-A INPUT')) {
+      rules.push(l);
+    }
+  });
+  // Render: policy at top + DROP/REJECT rules with × delete + ACCEPT rules
+  // dimmed (informational only).
+  const summary = `policy ${policy || '?'} · ${rules.length} rule${rules.length === 1 ? '' : 's'}`;
+  sub.innerHTML = `${summary} · <a class="mon-fw-save">SAVE</a>`;
+
+  if (!rules.length) {
+    list.innerHTML = '<div class="mon-empty">no rules · click a port row to add one</div>';
+  } else {
+    list.innerHTML = rules.map((r, i) => {
+      const target = (r.match(/-j\s+(\S+)/) || [, ''])[1];
+      const isDeny = target === 'DROP' || target === 'REJECT';
+      const portM = r.match(/--dport\s+(\d+)/);
+      const srcM = r.match(/-s\s+(\S+)/);
+      const protoM = r.match(/-p\s+(\S+)/);
+      // Compact summary line — shows the human-readable bits, full rule
+      // visible on hover.
+      const parts = [];
+      if (protoM) parts.push(protoM[1].toUpperCase());
+      if (portM) parts.push(`:${portM[1]}`);
+      if (srcM) parts.push(`from ${srcM[1]}`);
+      if (!parts.length) parts.push('chain rule');
+      return `
+        <div class="mon-row mon-fw-row${isDeny ? ' deny' : ''}" title="${escapeHtml(r)}">
+          <span class="mon-fw-target">${escapeHtml(target)}</span>
+          <span class="mon-fw-summary">${escapeHtml(parts.join(' '))}</span>
+          <span class="mon-fw-raw">${escapeHtml(r.replace(/^-A INPUT\s*/, ''))}</span>
+          <span class="mon-vol-actions">
+            <button class="row-btn danger" data-idx="${i}" title="Delete rule">×</button>
+          </span>
+        </div>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-idx]').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const r = rules[parseInt(btn.dataset.idx, 10)];
+        await deleteFirewallRule(sessionId, r);
+      });
+    });
+  }
+  const saveLink = sub.querySelector('.mon-fw-save');
+  if (saveLink) saveLink.addEventListener('click', () => persistFirewall(sessionId));
+}
+
+// Per-port floating menu: block port-wide, block from a specific IP, or
+// block the IP from everything. All actions go through the existing
+// closeContextMenu pattern so click-outside / Esc closes them.
+function showFirewallMenu(x, y, sessionId, port, proto) {
+  closeContextMenu();
+  const items = [
+    { label: `Block ${proto.toUpperCase()} :${port} (all sources)`, act: 'block-port' },
+    { label: `Allow ${proto.toUpperCase()} :${port} (remove blocks)`, act: 'allow-port' },
+    { sep: true },
+    { label: `Block IP from :${port}…`, act: 'block-ip-port' },
+    { label: 'Block IP from everything…', act: 'block-ip-all' },
+  ];
+  const menu = document.createElement('div');
+  menu.className = 'ctx-menu';
+  menu.innerHTML = items.map(i =>
+    i.sep ? '<div class="ctx-sep"></div>'
+          : `<div class="ctx-item${i.danger ? ' danger' : ''}" data-act="${i.act}">${escapeHtml(i.label)}</div>`
+  ).join('');
+  menu.addEventListener('click', e => e.stopPropagation());
+  document.body.appendChild(menu);
+  ctxMenuEl = menu;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth) menu.style.left = (window.innerWidth - r.width - 6) + 'px';
+  if (r.bottom > window.innerHeight) menu.style.top = (window.innerHeight - r.height - 6) + 'px';
+
+  menu.querySelectorAll('.ctx-item').forEach(el => {
+    el.addEventListener('click', async () => {
+      const act = el.dataset.act;
+      closeContextMenu();
+      await runFirewallAction(act, sessionId, port, proto);
+    });
+  });
+}
+
+async function runFirewallAction(act, sessionId, port, proto) {
+  if (act === 'block-port') {
+    const ok = await showConfirm(
+      `Block ALL ${proto.toUpperCase()} traffic to port ${port}?\n\nWill add: iptables -I INPUT -p ${proto} --dport ${port} -j DROP`,
+      { title: 'BLOCK PORT', okText: 'BLOCK', danger: true }
+    );
+    if (ok) await runIpt(sessionId, `iptables -I INPUT -p ${proto} --dport ${port} -j DROP`);
+  } else if (act === 'allow-port') {
+    // Walk the rules and -D anything that matches port + DROP. We do it
+    // with iptables -S → grep → iptables -D so duplicates also get cleared.
+    const list = withSudo("iptables -S INPUT", sessionId);
+    const ipt  = withSudo("iptables", sessionId);
+    const cmd = `${list} | grep -E 'dport ${port}.*-j (DROP|REJECT)' | sed 's/^-A/-D/' | while read r; do ${ipt} $r; done`;
+    await runIpt(sessionId, cmd, true);
+  } else if (act === 'block-ip-port') {
+    const ip = await showPrompt('Block which IP from this port?', '', { title: 'BLOCK IP FROM PORT', okText: 'BLOCK' });
+    if (ip && ipOk(ip)) await runIpt(sessionId, `iptables -I INPUT -p ${proto} --dport ${port} -s ${ip} -j DROP`);
+    else if (ip) toast('Invalid IP', 'err');
+  } else if (act === 'block-ip-all') {
+    const ip = await showPrompt('Block which IP from ALL ports?', '', { title: 'BLOCK IP', okText: 'BLOCK' });
+    if (ip && ipOk(ip)) await runIpt(sessionId, `iptables -I INPUT -s ${ip} -j DROP`);
+    else if (ip) toast('Invalid IP', 'err');
+  }
+}
+
+async function deleteFirewallRule(sessionId, ruleLine) {
+  const ok = await showConfirm(
+    `Delete this rule?\n\n${ruleLine}`,
+    { title: 'DELETE RULE', okText: 'DELETE', danger: true }
+  );
+  if (!ok) return;
+  // -A → -D flips append into delete; same args, exact match.
+  const delCmd = ruleLine.replace(/^-A\s+/, '-D ');
+  await runIpt(sessionId, `iptables ${delCmd}`);
+}
+
+async function persistFirewall(sessionId) {
+  const ok = await showConfirm(
+    'Persist current rules to /etc/iptables/rules.v4?\n\nNeeds iptables-persistent installed; otherwise rules disappear on reboot.',
+    { title: 'SAVE RULES', okText: 'SAVE' }
+  );
+  if (!ok) return;
+  const cmd = `(${withSudo('netfilter-persistent save', sessionId)} 2>&1 || ${withSudo('sh -c "iptables-save > /etc/iptables/rules.v4"', sessionId)} 2>&1)`;
+  const r = await execOut(sessionId, cmd, 10000);
+  if (r.code === 0) toast('Rules saved', 'ok');
+  else toast('Save failed: ' + ((r.stdout || r.stderr).trim().slice(0, 200)), 'err');
+}
+
+// Wraps a command in sudo. If the session has a stashed password (set by
+// enableSudo), pipe it via stdin (`sudo -S -p ''` reads the password from
+// stdin and silences its prompt so it doesn't bleed into stdout). Otherwise
+// fall back to `sudo -n` which only succeeds if NOPASSWD is configured.
+function withSudo(cmd, sessionId) {
+  const sess = sessionId ? activeSessions.get(sessionId) : null;
+  const pwd = sess && sess._sudoPwd;
+  if (pwd) {
+    // printf '%s\n' '<pwd>' | sudo -S -p '' <cmd>
+    // Single-quote the password and escape any inner singles.
+    const q = "'" + String(pwd).replace(/'/g, `'\\''`) + "'";
+    return `printf '%s\\n' ${q} | sudo -S -p '' ${cmd}`;
+  }
+  return `sudo -n ${cmd}`;
+}
+
+// Prepends sbin dirs to PATH for the wrapped command. Non-interactive SSH
+// shells often have a minimal PATH (just /usr/bin:/bin) so binaries like ss,
+// iptables, ip, nft live in /sbin or /usr/sbin and "command not found".
+// This helper makes them reachable without forcing a login shell.
+function withPath(cmd) {
+  return `PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin" ${cmd}`;
+}
+
+// One-shot sudo enrollment: prompt the user for the remote password, verify
+// it via `sudo -S -v`, stash on the session if accepted. From then on
+// withSudo() uses that password for ss / iptables / etc. Cleared when the
+// session disconnects (the sess object goes away).
+async function enableSudo(sessionId) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.connected) return;
+  const pwd = await showPrompt(
+    `Sudo password for ${sess.server.username}@${sess.server.host}.\nKept in app memory only for this session; never written to disk.`,
+    '',
+    { title: 'ENABLE SUDO', okText: 'ENABLE', passwordInput: true }
+  );
+  if (pwd == null || pwd === '') return;
+  // Visible progress while we validate — `sudo -v` over a slow SSH can
+  // easily take a couple of seconds and the prompt has already closed by
+  // now, so without this the user sees nothing happening and clicks again.
+  const progress = showProgressModal('VALIDATING SUDO', 'Checking password on remote…');
+  // -k first wipes any cached credentials so we're really testing this pwd.
+  const q = "'" + String(pwd).replace(/'/g, `'\\''`) + "'";
+  const cmd = `sudo -k 2>/dev/null; printf '%s\\n' ${q} | sudo -S -p '' -v 2>&1`;
+  const r = await execOut(sessionId, cmd, 8000);
+  progress.close();
+  if (r.code === 0) {
+    sess._sudoPwd = pwd;
+    toast('Sudo enabled · refreshing data…', 'ok');
+    // Reset cards that need privileged data back to skeleton so the user
+    // sees something is reloading rather than the stale "use sudo" hints.
+    if (sess.monitorEl) {
+      ['ports', 'fw'].forEach(k => {
+        const c = sess.monitorEl.querySelector('.mon-' + k);
+        if (!c) return;
+        c.classList.add('loading');
+        const list = c.querySelector('.mon-list');
+        if (list) list.innerHTML = '<div class="mon-skel"></div><div class="mon-skel"></div><div class="mon-skel"></div>';
+      });
+      // attempts counter reset so a one-off empty doesn't flash "no rules"
+      if (sess.monitor) sess.monitor.attempts = {};
+    }
+    pollSlow(sessionId);
+  } else {
+    toast('Sudo failed: ' + ((r.stdout || r.stderr).trim().slice(0, 200) || 'wrong password'), 'err');
+  }
+}
+
+async function runIpt(sessionId, cmd, alreadyWrapped = false) {
+  const full = alreadyWrapped ? cmd : withSudo(cmd, sessionId) + ' 2>&1';
+  const r = await execOut(sessionId, full, 8000);
+  if (r.code === 0) {
+    toast('Rule applied', 'ok');
+    pollSlow(sessionId);
+  } else {
+    const tail = (r.stdout || r.stderr || 'unknown').trim().slice(0, 200);
+    toast('iptables failed: ' + tail, 'err');
+  }
+}
+
+function ipOk(ip) {
+  // Permissive validator: IPv4 dotted-quad OR a CIDR like 1.2.3.0/24.
+  return /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(ip.trim());
+}
+
+// start / stop / restart share the same flow: fire the docker command, surface
+// docker's own stderr on failure, refresh the card on success. Timeout bumped
+// to 60 s because stop waits for the default grace period (10 s) and some
+// databases take longer to shut down cleanly.
+async function containerAction(sessionId, name, verb) {
+  const labels = {
+    start:   { ing: 'Starting',   done: 'Started'   },
+    stop:    { ing: 'Stopping',   done: 'Stopped'   },
+    restart: { ing: 'Restarting', done: 'Restarted' },
+  };
+  const l = labels[verb];
+  toast(`${l.ing} ${name}…`);
+  const r = await execOut(sessionId, `docker ${verb} ${shellQuoteArg(name)} 2>&1`, 60000);
+  if (r.code === 0) {
+    toast(`${l.done} ${name}`, 'ok');
+    pollSlow(sessionId);
+  } else {
+    toast(`Failed: ${(r.stdout || r.stderr || 'unknown error').trim().slice(0, 200)}`, 'err');
+  }
+}
+
+// Rebuild a compose-managed container: cd into the project working_dir
+// (taken from the docker-compose label) and run `docker compose up -d
+// --build <service>`. Falls back to legacy `docker-compose` (v1) if v2 isn't
+// installed. Image build can take minutes — long timeout, progress modal.
+async function rebuildContainer(sessionId, ctr) {
+  if (!ctr.compose || !ctr.compose.dir) return;
+  const ok = await showConfirm(
+    `Rebuild & restart "${ctr.name}"?\n\nWill run:\n  cd ${ctr.compose.dir}\n  docker compose up -d --build ${ctr.compose.service || ''}\n\nImage build can take minutes.`,
+    { title: 'REBUILD CONTAINER', okText: 'REBUILD' }
+  );
+  if (!ok) return;
+  const progress = showProgressModal(`REBUILDING · ${ctr.name}`, 'Building image + recreating container…');
+  // -f explicitly points at the compose file so we don't depend on cwd's
+  // default lookup. configFile may be empty → cd handles that.
+  const fileArg = ctr.compose.configFile ? `-f ${shellQuoteArg(ctr.compose.configFile)} ` : '';
+  const svcArg = ctr.compose.service ? ` ${shellQuoteArg(ctr.compose.service)}` : '';
+  const cmd =
+    `cd ${shellQuoteArg(ctr.compose.dir)} && ` +
+    `(docker compose ${fileArg}up -d --build${svcArg} 2>&1 || ` +
+    `docker-compose ${fileArg}up -d --build${svcArg} 2>&1)`;
+  const r = await execOut(sessionId, cmd, 600000);  // 10 min ceiling
+  progress.close();
+  if (r.code === 0) {
+    toast(`Rebuilt ${ctr.name}`, 'ok');
+    pollSlow(sessionId);
+  } else {
+    // Show last meaningful line of build output (build errors are long).
+    const tail = (r.stdout || r.stderr || 'unknown error').trim().split('\n').slice(-3).join('\n').slice(0, 400);
+    toast(`Rebuild failed:\n${tail}`, 'err');
+  }
+}
+
+// File editor: SFTP-backed read/write of a single text file. Plain textarea
+// with monospace + line-number gutter (no syntax highlighting — keeps the
+// app slim; users can still edit .env / yaml / Dockerfile comfortably).
+function showFileEditor(sessionId, remotePath) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.connected) { toast('Session not connected', 'err'); return; }
+
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body editor-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header editor-head">
+        <span class="editor-title">EDIT</span>
+        <span class="editor-path"></span>
+        <span class="editor-status"></span>
+        <button class="editor-close" aria-label="Close">×</button>
+      </div>
+      <div class="editor-body-inner">
+        <div class="editor-gutter"></div>
+        <textarea class="editor-area" spellcheck="false" wrap="off" disabled>Loading…</textarea>
+      </div>
+      <div class="modal-footer editor-foot">
+        <span class="editor-hint">⌘ S to save · Esc to close</span>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost editor-cancel">CLOSE</button>
+        <button class="btn btn-primary editor-save" disabled>SAVE</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+
+  back.querySelector('.editor-path').textContent = remotePath;
+
+  const ta = back.querySelector('.editor-area');
+  const gutter = back.querySelector('.editor-gutter');
+  const saveBtn = back.querySelector('.editor-save');
+  const status = back.querySelector('.editor-status');
+  let originalContent = '';
+  let dirty = false;
+
+  const renderGutter = () => {
+    const n = ta.value.split('\n').length;
+    let s = '';
+    for (let i = 1; i <= n; i++) s += i + '\n';
+    gutter.textContent = s;
+  };
+  const syncGutterScroll = () => { gutter.scrollTop = ta.scrollTop; };
+
+  const setDirty = (d) => {
+    dirty = d;
+    saveBtn.disabled = !d;
+    status.textContent = d ? '· modified' : '';
+  };
+
+  const finish = (force) => {
+    if (dirty && !force) {
+      // Don't surprise-discard edits — confirm first.
+      showConfirm('Discard unsaved changes?', {
+        title: 'CLOSE EDITOR', okText: 'DISCARD', danger: true,
+      }).then(ok => { if (ok) finish(true); });
+      return;
+    }
+    document.removeEventListener('keydown', onKey);
+    back.remove();
+  };
+
+  function onKey(e) {
+    if (e.key === 'Escape' && document.activeElement !== ta) { finish(); return; }
+    if (e.key === 'Escape') { ta.blur(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      doSave();
+    }
+  }
+
+  back.querySelector('.editor-close').onclick = () => finish();
+  back.querySelector('.editor-cancel').onclick = () => finish();
+  back.addEventListener('click', (e) => { if (e.target === back) finish(); });
+  document.addEventListener('keydown', onKey);
+
+  ta.addEventListener('input', () => {
+    renderGutter();
+    setDirty(ta.value !== originalContent);
+  });
+  ta.addEventListener('scroll', syncGutterScroll);
+
+  async function doSave() {
+    if (!dirty) return;
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'SAVING…';
+    try {
+      await window.api.sftp.writeFile({ sessionId, path: remotePath, content: ta.value });
+      originalContent = ta.value;
+      setDirty(false);
+      saveBtn.textContent = 'SAVE';
+      status.textContent = '· saved';
+      setTimeout(() => { if (!dirty) status.textContent = ''; }, 1500);
+    } catch (e) {
+      saveBtn.textContent = 'SAVE';
+      saveBtn.disabled = false;
+      toast('Save failed: ' + e.message, 'err');
+    }
+  }
+  saveBtn.onclick = doSave;
+
+  // Load file content via SFTP. Show error in editor area if it fails.
+  (async () => {
+    try {
+      const r = await window.api.sftp.readFile({ sessionId, path: remotePath });
+      ta.value = r.content;
+      originalContent = r.content;
+      ta.disabled = false;
+      renderGutter();
+      setTimeout(() => { ta.focus(); }, 30);
+    } catch (e) {
+      ta.value = `── could not read file ──\n${remotePath}\n\n${e.message || e}`;
+      ta.disabled = true;
+      saveBtn.disabled = true;
+    }
+  })();
+}
+
+async function exportContainer(sessionId, name) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess) return;
+  const ok = await showConfirm(
+    `Export container "${name}" filesystem to tar.gz and download?\n\nNote: this dumps the FS only — not the image history, ports, env, or volumes. For a full image backup use "docker save" on the underlying image.`,
+    { title: 'EXPORT CONTAINER', okText: 'PROCEED' }
+  );
+  if (!ok) return;
+
+  const stamp = Date.now();
+  const safe = name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const remoteTar = `/tmp/maxter-ctr-${safe}-${stamp}.tar.gz`;
+  const progress = showProgressModal(`EXPORTING CONTAINER · ${name}`, 'Running docker export + gzip…');
+
+  // docker export streams a tar of the FS to stdout; pipe through gzip to a
+  // temp file. Works on stopped containers too (a plus).
+  const packCmd = `docker export ${shellQuoteArg(name)} 2>/dev/null | gzip > ${shellQuoteArg(remoteTar)}`;
+  const packR = await execOut(sessionId, packCmd, 600000);
+  if (packR.code !== 0 && packR.code !== -1) {
+    progress.close();
+    toast(`Export failed: ${(packR.stderr || 'unknown').trim().slice(0, 200)}`, 'err');
+    await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+    return;
+  }
+
+  const sizeR = await execOut(sessionId, `stat -c '%s' ${shellQuoteArg(remoteTar)} 2>/dev/null`, 5000);
+  const bytes = parseInt((sizeR.stdout || '0').trim(), 10) || 0;
+  if (bytes === 0) {
+    progress.close();
+    toast('Export produced empty archive', 'err');
+    await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+    return;
+  }
+  progress.update(`Packed · ${humanSize(bytes)}. Pick where to save…`);
+
+  let saved;
+  try {
+    saved = await window.api.sftp.download({ sessionId, remotePath: remoteTar });
+  } catch (e) {
+    progress.close();
+    toast('Download failed: ' + e.message, 'err');
+    await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+    return;
+  }
+
+  await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+  progress.close();
+
+  if (saved && saved.canceled) toast('Download cancelled', 'warn');
+  else if (saved && saved.ok) toast(`Saved · ${humanSize(bytes)} → ${saved.localPath}`, 'ok');
+}
+
+function renderVolumes(sess, raw, code, volMap, sessionId) {
+  const card = sess.monitorEl.querySelector('.mon-vols');
+  const list = card.querySelector('.mon-list');
+  const sub = card.querySelector('.mon-sub');
+  card.classList.remove('loading');
+  let parsed;
+  try { parsed = JSON.parse(raw.trim()); } catch (_) { parsed = null; }
+  const vols = (parsed && parsed.Volumes) || [];
+  if (!vols.length) {
+    list.innerHTML = `<div class="mon-empty">${code === 0 ? 'no volumes' : 'docker not available'}</div>`;
+    sub.textContent = '';
+    return;
+  }
+  sub.textContent = `${vols.length} volume${vols.length > 1 ? 's' : ''}`;
+  const parseSize = s => {
+    const m = String(s || '').match(/([\d.]+)\s*([KMGT]?)B?/i);
+    if (!m) return 0;
+    const v = parseFloat(m[1]);
+    const unit = m[2].toUpperCase();
+    return v * ({ '': 1, K: 1e3, M: 1e6, G: 1e9, T: 1e12 }[unit] || 1);
+  };
+  vols.sort((a, b) => parseSize(b.Size) - parseSize(a.Size));
+  list.innerHTML = vols.map(v => {
+    const users = (volMap && volMap.get(v.Name)) || [];
+    const usersStr = users.length
+      ? users.map(u => `<a class="mon-vol-user" data-ctr="${escapeHtml(u)}">${escapeHtml(u)}</a>`).join(', ')
+      : '<span class="mon-vol-orphan">unused</span>';
+    return `
+      <div class="mon-row mon-vol-row" data-vol="${escapeHtml(v.Name || '')}">
+        <div class="mon-row-line">
+          <span class="mon-row-name">${escapeHtml(v.Name || '')}</span>
+          <span class="mon-row-val">${escapeHtml(v.Size || '—')}</span>
+        </div>
+        <div class="mon-vol-users">${usersStr}</div>
+        <div class="mon-vol-actions">
+          <button class="row-btn" data-act="dl" title="Download as tar.gz">↓</button>
+          <button class="row-btn danger" data-act="rm" title="Delete volume">×</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  // Bind action buttons + container-name click-through.
+  list.querySelectorAll('.mon-vol-row').forEach(row => {
+    const volName = row.dataset.vol;
+    row.querySelectorAll('.row-btn').forEach(b => {
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (b.dataset.act === 'rm') await deleteVolume(sessionId, volName);
+        else if (b.dataset.act === 'dl') await downloadVolume(sessionId, volName);
+      });
+    });
+    row.querySelectorAll('.mon-vol-user').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.stopPropagation();
+        flashContainerRow(sess, a.dataset.ctr);
+      });
+    });
+  });
+}
+
+async function deleteVolume(sessionId, volName) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess) return;
+  const ok = await showConfirm(
+    `Delete volume "${volName}"? This is irreversible. Volumes in use by containers will be refused by docker.`,
+    { title: 'DELETE VOLUME', okText: 'DELETE', danger: true }
+  );
+  if (!ok) return;
+  const r = await execOut(sessionId, `docker volume rm ${shellQuoteArg(volName)} 2>&1`, 10000);
+  if (r.code === 0) {
+    toast(`Deleted volume "${volName}"`, 'ok');
+    pollSlow(sessionId);  // refresh immediately
+  } else {
+    toast(`Failed: ${(r.stdout || r.stderr || 'unknown error').trim()}`, 'err');
+  }
+}
+
+async function downloadVolume(sessionId, volName) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess) return;
+  const ok = await showConfirm(
+    `Pack volume "${volName}" into tar.gz and download?\n\nUses a temporary alpine container to bundle the data; you'll be prompted where to save the archive.`,
+    { title: 'DOWNLOAD VOLUME', okText: 'PROCEED' }
+  );
+  if (!ok) return;
+
+  // Unique tmp path on remote so concurrent downloads don't collide.
+  const stamp = Date.now();
+  const remoteTar = `/tmp/maxter-vol-${volName.replace(/[^a-zA-Z0-9._-]/g, '_')}-${stamp}.tar.gz`;
+  const progress = showProgressModal(`PACKING VOLUME · ${volName}`, 'Spinning up alpine + tar…');
+
+  // 1) Pack via alpine container. -v <vol>:/src mounts named volume RO-style;
+  // -v /tmp:/dst lets us write the archive on the host. busybox tar would
+  // also work but alpine is more universally present.
+  const packCmd =
+    `docker run --rm -v ${shellQuoteArg(volName)}:/src:ro -v /tmp:/dst alpine ` +
+    `tar czf /dst/${remoteTar.split('/').pop()} -C /src . 2>&1`;
+  const packR = await execOut(sessionId, packCmd, 600000);  // up to 10 min
+  if (packR.code !== 0) {
+    progress.close();
+    toast(`Pack failed: ${(packR.stdout || packR.stderr || 'unknown').trim().slice(0, 200)}`, 'err');
+    return;
+  }
+
+  // 2) Get size for the progress hint.
+  const sizeR = await execOut(sessionId, `stat -c '%s' ${shellQuoteArg(remoteTar)} 2>/dev/null`, 5000);
+  const bytes = parseInt((sizeR.stdout || '0').trim(), 10) || 0;
+  progress.update(`Packed · ${humanSize(bytes)}. Pick where to save…`);
+
+  // 3) Save dialog + SFTP transfer (sftp:download already prompts).
+  let saved;
+  try {
+    saved = await window.api.sftp.download({ sessionId, remotePath: remoteTar });
+  } catch (e) {
+    progress.close();
+    toast('Download failed: ' + e.message, 'err');
+    await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+    return;
+  }
+
+  // 4) Cleanup the temp tar on remote regardless.
+  await execOut(sessionId, `rm -f ${shellQuoteArg(remoteTar)}`, 5000);
+  progress.close();
+
+  if (saved && saved.canceled) {
+    toast('Download cancelled', 'warn');
+  } else if (saved && saved.ok) {
+    toast(`Saved · ${humanSize(bytes)} → ${saved.localPath}`, 'ok');
+  }
+}
+
+// Tiny progress modal — single line of status text + spinner. Returned
+// handle has `update(text)` and `close()`.
+function showProgressModal(title, message) {
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body dialog-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header">${escapeHtml(title)}</div>
+      <div class="dialog-msg progress-msg">
+        <span class="progress-spinner"></span>
+        <span class="progress-text"></span>
+      </div>
+    </div>
+  `;
+  back.querySelector('.progress-text').textContent = message;
+  document.body.appendChild(back);
+  return {
+    update: (msg) => { const t = back.querySelector('.progress-text'); if (t) t.textContent = msg; },
+    close: () => back.remove(),
+  };
+}
+
+// Single-quote escape for arbitrary strings passed to a remote shell.
+function shellQuoteArg(s) {
+  return "'" + String(s).replace(/'/g, `'\\''`) + "'";
+}
+
+// ─── Processes drilldown (CPU / MEM card click) ───
+// Auto-refreshing top-N processes, sortable column. Polling stops when modal
+// is dismissed (timer cleared inside finish()).
+function showProcessesModal(sessionId, mode /* 'cpu' | 'mem' */) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.connected) return;
+
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body proc-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header proc-head">
+        <span>PROCESSES</span>
+        <div class="proc-tabs">
+          <button class="seg ${mode === 'cpu' ? 'active' : ''}" data-mode="cpu">BY CPU</button>
+          <button class="seg ${mode === 'mem' ? 'active' : ''}" data-mode="mem">BY MEMORY</button>
+        </div>
+        <button class="proc-close" aria-label="Close">×</button>
+      </div>
+      <div class="proc-list-wrap">
+        <div class="proc-grid proc-header">
+          <span>PID</span><span>USER</span><span class="proc-num">CPU%</span><span class="proc-num">MEM%</span><span>COMMAND</span>
+        </div>
+        <div class="proc-list"><div class="mon-empty">SCANNING…</div></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+
+  let currentMode = mode;
+  let timer = null;
+  const finish = () => {
+    if (timer) clearInterval(timer);
+    document.removeEventListener('keydown', onEsc);
+    back.remove();
+  };
+  function onEsc(e) { if (e.key === 'Escape') finish(); }
+
+  back.querySelector('.proc-close').onclick = finish;
+  back.addEventListener('click', (e) => { if (e.target === back) finish(); });
+  document.addEventListener('keydown', onEsc);
+
+  back.querySelectorAll('.proc-tabs .seg').forEach(b => {
+    b.addEventListener('click', () => {
+      currentMode = b.dataset.mode;
+      back.querySelectorAll('.proc-tabs .seg').forEach(x => x.classList.toggle('active', x === b));
+      tick();
+    });
+  });
+
+  const list = back.querySelector('.proc-list');
+  const tick = async () => {
+    const sortKey = currentMode === 'cpu' ? '-%cpu' : '-%mem';
+    // ps with explicit columns + no headers; trim COMMAND with cut to keep
+    // rows compact. argv may contain spaces — last column gobbles the rest.
+    const cmd = `ps -eo pid,user,%cpu,%mem,comm --sort=${sortKey} --no-headers 2>/dev/null | head -25`;
+    const r = await execOut(sessionId, cmd, 5000);
+    if (!back.isConnected) return;  // user closed mid-fetch
+    const lines = (r.stdout || '').split('\n').filter(Boolean);
+    if (!lines.length) {
+      list.innerHTML = '<div class="mon-empty">no processes</div>';
+      return;
+    }
+    list.innerHTML = lines.map(l => {
+      const m = l.trim().match(/^(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+      if (!m) return '';
+      const [, pid, user, cpu, mem, comm] = m;
+      const cpuN = parseFloat(cpu);
+      const memN = parseFloat(mem);
+      const hot = (currentMode === 'cpu' ? cpuN : memN) >= 50;
+      const warm = (currentMode === 'cpu' ? cpuN : memN) >= 15;
+      return `
+        <div class="proc-grid proc-row${hot ? ' hot' : warm ? ' warm' : ''}">
+          <span>${escapeHtml(pid)}</span>
+          <span>${escapeHtml(user)}</span>
+          <span class="proc-num">${escapeHtml(cpu)}</span>
+          <span class="proc-num">${escapeHtml(mem)}</span>
+          <span class="proc-cmd" title="${escapeHtml(comm)}">${escapeHtml(comm)}</span>
+        </div>
+      `;
+    }).join('');
+  };
+
+  tick();
+  timer = setInterval(tick, 3000);
+}
+
+// ─── Disk drilldown (DISK card click) ───
+// du -h --max-depth=1 of a chosen path; click on a child folder drills in;
+// breadcrumb at top jumps back. Cancellable: each navigation clears the
+// previous in-flight call so old results can't clobber a newer drill.
+function showDiskModal(sessionId, startPath) {
+  const sess = activeSessions.get(sessionId);
+  if (!sess || !sess.connected) return;
+
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body disk-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header disk-head">
+        <span>DISK USAGE</span>
+        <button class="disk-close" aria-label="Close">×</button>
+      </div>
+      <div class="disk-bar">
+        <button class="ico-btn disk-up" title="Parent">↑</button>
+        <div class="fs-crumbs disk-crumbs"></div>
+      </div>
+      <div class="disk-list"><div class="mon-empty">SCANNING…</div></div>
+      <div class="disk-foot">
+        <span class="disk-hint">click a folder to drill in · esc to close</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+
+  let currentPath = startPath;
+  let runId = 0;
+  const finish = () => {
+    runId = -1;
+    document.removeEventListener('keydown', onEsc);
+    back.remove();
+  };
+  function onEsc(e) { if (e.key === 'Escape') finish(); }
+  back.querySelector('.disk-close').onclick = finish;
+  back.addEventListener('click', (e) => { if (e.target === back) finish(); });
+  document.addEventListener('keydown', onEsc);
+
+  const listEl = back.querySelector('.disk-list');
+  const crumbsEl = back.querySelector('.disk-crumbs');
+
+  const renderCrumbsHere = (p) => {
+    renderCrumbs(crumbsEl, p);
+    crumbsEl.querySelectorAll('.crumb').forEach(c => {
+      c.addEventListener('click', () => navigate(c.dataset.path));
+    });
+  };
+
+  back.querySelector('.disk-up').addEventListener('click', () => navigate(parentDir(currentPath)));
+
+  async function navigate(p) {
+    if (!p) return;
+    currentPath = p;
+    renderCrumbsHere(p);
+    listEl.innerHTML = '<div class="mon-empty">SCANNING…</div>';
+    const myRun = ++runId;
+    // -x = stay on one filesystem, -h human-readable. 2>/dev/null swallows
+    // permission-denied noise. Sort by size desc; head for sanity (some
+    // dirs have hundreds of children).
+    const cmd = `du -hxd 1 ${shellQuote(p)} 2>/dev/null | sort -hr | head -50`;
+    const r = await execOut(sessionId, cmd, 30000);
+    if (myRun !== runId || !back.isConnected) return;
+    const lines = (r.stdout || '').split('\n').filter(Boolean);
+    if (!lines.length) {
+      listEl.innerHTML = '<div class="mon-empty">no data (permission denied?)</div>';
+      return;
+    }
+    // Last line is usually the parent itself (its total) — show separately.
+    const total = lines.shift();
+    const totalMatch = total.match(/^(\S+)\s+(.+)$/);
+    let totalSize = totalMatch ? totalMatch[1] : '';
+    // If the lines start with the parent total, sort moved it; check first
+    // line equals current path.
+    const first = lines[0] && lines[0].match(/^(\S+)\s+(.+)$/);
+    if (first && first[2] === p) {
+      totalSize = first[1];
+      lines.shift();
+    } else if (totalMatch && totalMatch[2] !== p) {
+      // The "total" line was actually a child — put it back and recompute.
+      lines.unshift(total);
+      totalSize = '';
+    }
+
+    // Compute max bytes for the bar.
+    const parseSize = s => {
+      const m = String(s || '').match(/([\d.]+)\s*([KMGT]?)/i);
+      if (!m) return 0;
+      const v = parseFloat(m[1]);
+      const unit = (m[2] || '').toUpperCase();
+      return v * ({ '': 1, K: 1e3, M: 1e6, G: 1e9, T: 1e12 }[unit] || 1);
+    };
+    const rows = lines.map(l => {
+      const m = l.match(/^(\S+)\s+(.+)$/);
+      if (!m) return null;
+      const [, sz, fp] = m;
+      const name = fp === p ? '(this dir)' : fp.replace(p.replace(/\/$/, '') + '/', '');
+      return { size: sz, bytes: parseSize(sz), path: fp, name };
+    }).filter(Boolean);
+    const maxBytes = rows.reduce((a, r) => Math.max(a, r.bytes), 1);
+
+    listEl.innerHTML = `
+      ${totalSize ? `<div class="disk-total">${escapeHtml(totalSize)} total</div>` : ''}
+      ${rows.map(r => {
+        const w = Math.round((r.bytes / maxBytes) * 100);
+        const isDir = r.path !== p;  // anything that isn't "this dir"
+        return `
+          <div class="disk-row${isDir ? ' nav' : ''}" data-path="${escapeHtml(r.path)}" data-isdir="${isDir ? '1' : ''}">
+            <div class="disk-row-bar"><div class="disk-row-fill" style="width:${w}%"></div></div>
+            <div class="disk-row-line">
+              <span class="disk-row-size">${escapeHtml(r.size)}</span>
+              <span class="disk-row-name" title="${escapeHtml(r.path)}">${escapeHtml(r.name)}</span>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    `;
+    listEl.querySelectorAll('.disk-row.nav').forEach(el => {
+      el.addEventListener('click', () => navigate(el.dataset.path));
+    });
+  }
+
+  function shellQuote(s) {
+    // Single-quote and escape any inner single quotes. Safe for arbitrary paths.
+    return "'" + String(s).replace(/'/g, `'\\''`) + "'";
+  }
+
+  navigate(startPath);
+}
+
 // ─── Context menu + Properties ───
 let ctxMenuEl = null;
 function closeContextMenu() {
@@ -2202,6 +3991,62 @@ async function refreshDockIcon() {
     const url = await makeDockIconDataURL();
     if (url) await window.api.dock.setIcon(url);
   } catch (e) {}
+}
+
+// ─── SSH host key verification ───
+// Renderer side of known_hosts: main process triggers this when it sees a
+// key it doesn't recognise (or one that has CHANGED, which is the scary
+// path — possible MITM). User accepts/rejects; the response goes back via
+// host.respond(id, ...).
+window.api.host.onVerify(async ({ id, host, port, fingerprint, previous, firstTime }) => {
+  const accepted = await showHostKeyDialog({ host, port, fingerprint, previous, firstTime });
+  await window.api.host.respond({ id, accept: accepted, save: accepted });
+});
+
+function showHostKeyDialog({ host, port, fingerprint, previous, firstTime }) {
+  return new Promise(resolve => {
+    const back = document.createElement('div');
+    back.className = 'modal info-modal';
+    const isChanged = !firstTime;
+    back.innerHTML = `
+      <div class="modal-body dialog-body hostkey-body${isChanged ? ' danger' : ''}">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <div class="modal-header">${isChanged ? 'HOST KEY CHANGED' : 'NEW HOST'}</div>
+        <div class="dialog-msg hostkey-msg"></div>
+        <div class="modal-footer">
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost hostkey-cancel">${isChanged ? 'ABORT' : 'CANCEL'}</button>
+          <button class="btn ${isChanged ? 'btn-danger' : 'btn-primary'} hostkey-accept">${isChanged ? 'TRUST NEW (DANGEROUS)' : 'TRUST & SAVE'}</button>
+        </div>
+      </div>
+    `;
+    const msgEl = back.querySelector('.hostkey-msg');
+    msgEl.innerHTML = isChanged
+      ? `
+        <div class="hostkey-warn">⚠ The host key for <span class="hostkey-host">${escapeHtml(host)}:${port}</span> has CHANGED.</div>
+        <div class="hostkey-row"><span class="hostkey-label">EXPECTED</span><span class="hostkey-fp">${escapeHtml(previous || '?')}</span></div>
+        <div class="hostkey-row"><span class="hostkey-label">PRESENTED</span><span class="hostkey-fp">${escapeHtml(fingerprint)}</span></div>
+        <div class="hostkey-warn-foot">This could be a man-in-the-middle attack, OR the server's SSH key was legitimately rotated. If unsure — abort and verify out of band.</div>
+      `
+      : `
+        <div class="hostkey-host">${escapeHtml(host)}:${port}</div>
+        <div class="hostkey-row"><span class="hostkey-label">FINGERPRINT</span><span class="hostkey-fp">${escapeHtml(fingerprint)}</span></div>
+        <div class="hostkey-foot">First time connecting. Verify the fingerprint with the server admin (or via console) before trusting.</div>
+      `;
+    document.body.appendChild(back);
+    const finish = (accept) => {
+      back.remove();
+      document.removeEventListener('keydown', onEsc);
+      resolve(accept);
+    };
+    function onEsc(e) { if (e.key === 'Escape') finish(false); }
+    back.querySelector('.hostkey-accept').onclick = () => finish(true);
+    back.querySelector('.hostkey-cancel').onclick = () => finish(false);
+    back.addEventListener('click', (e) => { if (e.target === back) finish(false); });
+    document.addEventListener('keydown', onEsc);
+    setTimeout(() => back.querySelector('.hostkey-cancel').focus(), 50);  // safe default
+  });
 }
 
 // ─── Boot ───

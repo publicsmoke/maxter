@@ -457,48 +457,40 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
 }
 .srv.online { border-left: 2px solid var(--accent); }
 
-/* Status pip: a hollow square that fills with the theme's accent when an SSH
-   session is live. Was hardcoded green (--ok), but --ok varies wildly per
-   theme (red on Terminator, white on Void, orange on Sunset…) and wrecked
-   the signal. --accent always fits the active palette by definition. */
+/* Status pip: tiny outlined square that fills with the theme's accent when
+   an SSH session is live. Kept minimal — 7×7, 1 px border — so it reads as
+   a signal indicator, not a feature of the row. Uses --accent (not --ok)
+   because --ok varies wildly per theme and mis-signals on Terminator (red),
+   Void (white), Amber, etc. */
 .srv-dot {
   position: relative;
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
   border-radius: 0;
   background: transparent;
-  border: 1.5px solid var(--text-4);
+  border: 1px solid var(--text-4);
   margin: 0 auto;
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
   display: block;
 }
-/* Established link — filled accent square + halo. Inner pixel uses
-   --accent-hot to read as "active/lit". */
 .srv.online .srv-dot {
-  background: var(--accent-hot);
+  background: var(--accent);
   border-color: var(--accent);
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent),
-    0 0 8px  color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 55%, transparent);
 }
-/* Handshake in progress — same colour as online, but pulsing */
 .srv.connecting .srv-dot {
-  background: var(--accent-hot);
+  background: var(--accent);
   border-color: var(--accent);
   animation: srvBlink 0.7s ease-in-out infinite;
 }
 @keyframes srvBlink {
   0%, 100% {
     opacity: 1;
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent),
-      0 0 10px color-mix(in srgb, var(--accent) 80%, transparent);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
   }
   50% {
     opacity: 0.35;
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent),
-      0 0 3px  color-mix(in srgb, var(--accent) 25%, transparent);
+    box-shadow: 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
   }
 }
 
@@ -915,6 +907,41 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   color: var(--text-2);
   letter-spacing: 1px;
 }
+.reconnect-btn {
+  display: none;
+  -webkit-app-region: no-drag;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--alert);
+  color: var(--alert);
+  padding: 4px 10px;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  margin-right: 10px;
+}
+.reconnect-btn svg { width: 11px; height: 11px; display: block; }
+.reconnect-btn:hover {
+  background: var(--alert);
+  color: var(--bg-0);
+}
+.session-offline .reconnect-btn { display: inline-flex; }
+.session-reconnecting .reconnect-btn {
+  display: inline-flex;
+  border-color: var(--warn);
+  color: var(--warn);
+  pointer-events: none;
+  opacity: 0.7;
+}
+.session-reconnecting .reconnect-btn svg {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+
 .info-dot {
   width: 8px; height: 8px;
   background: var(--accent-hot);
@@ -1136,6 +1163,906 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 
+/* ─── Monitor pane ─── */
+.monitor-pane {
+  position: absolute; inset: 0;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--bg-0);
+  /* Force text-selection on every descendant; some ancestors elsewhere set
+     user-select:none for drag UX, which used to leak in. The themed colour
+     comes from the global ::selection rule. */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.monitor-pane * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.mon-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    "cpu mem"
+    "disk disk"
+    "docker docker"
+    "ports sites"
+    "fw fw"
+    "vols vols";
+  gap: 12px;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+.mon-cpu    { grid-area: cpu; }
+.mon-mem    { grid-area: mem; }
+.mon-disk   { grid-area: disk; }
+.mon-docker { grid-area: docker; }
+.mon-ports  { grid-area: ports; }
+.mon-sites  { grid-area: sites; }
+.mon-fw     { grid-area: fw; }
+.mon-vols   { grid-area: vols; }
+
+.mon-card {
+  position: relative;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  padding: 14px 16px;
+  min-height: 80px;
+}
+.mon-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text-3);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+}
+.mon-sub {
+  color: var(--text-4);
+  letter-spacing: 1.5px;
+  font-size: 9px;
+  text-transform: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mon-big {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-bottom: 8px;
+  font-family: var(--family-display);
+}
+.mon-val {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1;
+  letter-spacing: 1px;
+}
+.mon-unit {
+  font-size: 14px;
+  color: var(--text-3);
+  letter-spacing: 2px;
+}
+.mon-bar {
+  height: 3px;
+  background: var(--bg-3);
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.mon-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0;
+  transition: width 0.4s ease-out, background 0.2s;
+}
+.mon-card.warm .mon-bar-fill { background: var(--warn); }
+.mon-card.hot  .mon-bar-fill { background: var(--alert); }
+.mon-card.hot  .mon-val      { color: var(--alert); }
+.mon-meta {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 1px;
+  line-height: 1.5;
+}
+
+.mon-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  /* Always reserve scrollbar space so the right-hand action buttons don't
+     jump around when the list grows past max-height. Extra padding-right
+     pushes the action cluster a bit further from where the scrollbar lives,
+     so they don't visually crowd. */
+  scrollbar-gutter: stable;
+  padding-right: 12px;
+}
+.mon-row {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+.mon-row:last-child { border-bottom: none; }
+.mon-row-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-2);
+}
+.mon-row-name {
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mon-row-val {
+  color: var(--text-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mon-row-bar {
+  margin-top: 4px;
+  height: 2px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.mon-row-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s;
+}
+.mon-row.warm .mon-row-fill { background: var(--warn); }
+.mon-row.warm .mon-row-val  { color: var(--warn); }
+.mon-row.hot  .mon-row-fill { background: var(--alert); }
+.mon-row.hot  .mon-row-val  { color: var(--alert); }
+.mon-empty {
+  text-align: center;
+  color: var(--text-4);
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 3px;
+  padding: 18px;
+  text-transform: uppercase;
+}
+
+/* ─── Container rows: status pip + two-line info + action buttons ─── */
+.mon-ctr-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.mon-ctr-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 0;
+  align-self: center;
+  justify-self: center;
+}
+.mon-ctr-running .mon-ctr-dot {
+  background: var(--accent);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.mon-ctr-stopped .mon-ctr-dot {
+  background: transparent;
+  border: 1px solid var(--text-4);
+}
+.mon-ctr-main {
+  min-width: 0;
+  overflow: hidden;
+}
+.mon-ctr-meta {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  color: var(--text-3);
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mon-ctr-stopped .mon-row-name { color: var(--text-3); }
+.mon-ctr-stopped .mon-row-val  { color: var(--text-4); }
+.mon-ctr-stopped .mon-ctr-meta { color: var(--text-4); }
+.mon-ctr-ports {
+  color: var(--accent-hot);
+  font-weight: 500;
+}
+
+/* ─── Listening ports rows ─── */
+.mon-port-row {
+  display: grid;
+  grid-template-columns: 36px 70px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-family: var(--family-mono);
+  font-size: 10px;
+}
+.mon-port-proto {
+  color: var(--text-3);
+  letter-spacing: 1.5px;
+  font-size: 9px;
+}
+.mon-port-num {
+  color: var(--accent-hot);
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.mon-port-proc {
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mon-port-pid {
+  color: var(--text-4);
+  font-size: 9px;
+  margin-left: 4px;
+}
+.mon-port-noproc {
+  color: var(--text-4);
+  font-style: italic;
+}
+.mon-port-sudo {
+  color: var(--warn);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed var(--warn);
+  transition: color 0.1s, border-color 0.1s;
+  letter-spacing: 0.5px;
+}
+.mon-port-sudo:hover {
+  color: var(--accent-hot);
+  border-bottom-color: var(--accent);
+}
+
+/* ─── Nginx site rows (uses mon-vol-users for the server_name line) ─── */
+.mon-site-row .mon-row-val {
+  color: var(--accent-hot);
+  font-weight: 500;
+}
+
+/* ─── Compose project line under container row ─── */
+.mon-ctr-proj {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+}
+.mon-ctr-proj-icon {
+  color: var(--accent);
+}
+.mon-ctr-proj-dir {
+  color: var(--text-3);
+  cursor: default;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}
+.mon-ctr-proj-files {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-4);
+}
+.mon-ctr-file {
+  color: var(--text-2);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: color 0.1s, border-color 0.1s;
+}
+.mon-ctr-file:hover {
+  color: var(--accent-hot);
+  border-bottom-color: var(--accent);
+}
+
+/* ─── File editor modal ─── */
+.editor-body {
+  width: 90vw;
+  max-width: 1100px;
+  height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.editor-head {
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.editor-title { flex-shrink: 0; }
+.editor-path {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  flex: 1;
+  text-transform: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.editor-status {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--accent-hot);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.editor-close {
+  background: transparent;
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+  width: 22px; height: 22px;
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-close:hover { border-color: var(--alert); color: var(--alert); }
+.editor-body-inner {
+  flex: 1;
+  display: flex;
+  border: 1px solid var(--line);
+  background: var(--bg-0);
+  min-height: 0;
+  overflow: hidden;
+}
+.editor-gutter {
+  width: 50px;
+  padding: 10px 8px 10px 0;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+  font-family: var(--family-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-4);
+  text-align: right;
+  white-space: pre;
+  overflow: hidden;
+  user-select: none;
+  flex-shrink: 0;
+}
+.editor-area {
+  flex: 1;
+  background: var(--bg-0);
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 10px 12px;
+  font-family: var(--family-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text);
+  letter-spacing: 0.2px;
+  tab-size: 4;
+  white-space: pre;
+}
+.editor-area:disabled {
+  color: var(--text-3);
+  background: var(--bg-1);
+}
+.editor-foot {
+  display: flex !important;
+  align-items: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  gap: 12px;
+}
+.editor-hint {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  color: var(--text-4);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+/* ─── Listening port row: cursor + chevron, no dedicated button ─── */
+.mon-port-row {
+  grid-template-columns: 36px 70px 1fr 14px !important;
+  cursor: pointer;
+  transition: background 0.08s, padding 0.08s;
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+.mon-port-row:hover {
+  background: var(--hover);
+}
+.mon-port-chev {
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: right;
+  transition: color 0.08s, transform 0.08s;
+}
+.mon-port-row:hover .mon-port-chev {
+  color: var(--accent-hot);
+  transform: translateX(2px);
+}
+
+/* ─── Volume ↔ container cross-links + flash highlight ─── */
+.mon-vol-user, .mon-ctr-vol {
+  color: var(--text-2);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: color 0.1s, border-color 0.1s;
+}
+.mon-vol-user:hover, .mon-ctr-vol:hover {
+  color: var(--accent-hot);
+  border-bottom-color: var(--accent);
+}
+.mon-ctr-vols {
+  margin-top: 3px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: var(--text-3);
+}
+.mon-ctr-vols-label {
+  color: var(--text-4);
+  letter-spacing: 1.5px;
+}
+.mon-row.flash {
+  animation: flashRow 1.4s ease-out;
+}
+@keyframes flashRow {
+  0%   { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+  100% { background: transparent; }
+}
+
+/* ─── Firewall rows ─── */
+.mon-fw-row {
+  display: grid;
+  grid-template-columns: 60px 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  font-family: var(--family-mono);
+  font-size: 10px;
+}
+.mon-fw-target {
+  color: var(--text-3);
+  letter-spacing: 1.5px;
+  font-size: 9px;
+}
+.mon-fw-row.deny .mon-fw-target { color: var(--alert); }
+.mon-fw-summary {
+  color: var(--text);
+  letter-spacing: 0.4px;
+}
+.mon-fw-raw {
+  color: var(--text-4);
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.mon-fw-save, .mon-site-mainconf {
+  color: var(--accent-hot);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.1s;
+}
+.mon-fw-save:hover, .mon-site-mainconf:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* ─── Nginx site row clickable ─── */
+.mon-site-row {
+  cursor: pointer;
+  transition: background 0.08s;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.mon-site-row:hover { background: var(--hover); }
+
+/* ─── Volume rows: extra users line + action buttons on the right ─── */
+.mon-vol-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  align-items: center;
+}
+.mon-vol-row .mon-row-line   { grid-column: 1; grid-row: 1; }
+.mon-vol-row .mon-vol-users  { grid-column: 1; grid-row: 2; }
+.mon-vol-row .mon-vol-actions{ grid-column: 2; grid-row: 1 / 3; align-self: center; }
+.mon-vol-users {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  color: var(--text-3);
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mon-vol-orphan {
+  color: var(--text-4);
+  font-style: italic;
+}
+.mon-vol-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Container action cluster: pin to the top of the row so multi-line content
+   below (compose project links) doesn't push the buttons down. Fixed slot
+   width (4 buttons + gaps) keeps every row's cluster identical even when
+   some slots are invisible spacers. */
+.mon-ctr-row .mon-vol-actions {
+  align-self: start;
+  margin-top: 2px;
+  /* 4 × 22px button + 3 × 4px gap = 100px exact */
+  width: 100px;
+  justify-content: flex-end;
+}
+/* Invisible spacer that occupies the same footprint as a row-btn so the
+   visible buttons line up across rows even when not all four actions apply
+   (e.g., stopped containers have no "restart"; non-compose has no "rebuild"). */
+.row-btn-spacer {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+/* ─── Progress modal (volume packing) ─── */
+.progress-msg {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+.progress-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.progress-text {
+  font-family: var(--family-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  letter-spacing: 0.4px;
+}
+
+/* ─── Loading skeletons ─── */
+/* Animated bar that pulses across with a soft accent-tinted gradient — used
+   in two contexts: a full-width row inside list cards, or a sized block over
+   the big-value area of CPU/MEM cards. Shared shimmer keyframes. */
+.mon-skel {
+  height: 14px;
+  margin: 8px 0;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 14%, var(--bg-3)) 50%,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: monShimmer 1.5s linear infinite;
+}
+@keyframes monShimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Big-value cards (CPU, MEMORY): hide the placeholder text and overlay a
+   sized shimmer block + dim the empty bar so it pulses too. */
+.mon-card.loading .mon-val,
+.mon-card.loading .mon-unit,
+.mon-card.loading .mon-meta { visibility: hidden; }
+.mon-card.loading .mon-big {
+  position: relative;
+}
+.mon-card.loading .mon-big::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 130px;
+  height: 32px;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 14%, var(--bg-3)) 50%,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: monShimmer 1.5s linear infinite;
+  pointer-events: none;
+}
+.mon-card.loading .mon-meta {
+  position: relative;
+}
+.mon-card.loading .mon-meta::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 60%;
+  height: 10px;
+  background:
+    linear-gradient(90deg,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 0%,
+      color-mix(in srgb, var(--accent) 10%, var(--bg-3)) 50%,
+      color-mix(in srgb, var(--bg-3) 60%, transparent) 100%);
+  background-size: 200% 100%;
+  animation: monShimmer 1.5s linear infinite;
+}
+.mon-card.loading .mon-bar-fill {
+  width: 100% !important;
+  opacity: 0.18;
+  background:
+    linear-gradient(90deg,
+      var(--bg-3) 0%,
+      var(--accent) 50%,
+      var(--bg-3) 100%);
+  background-size: 200% 100%;
+  animation: monShimmer 1.5s linear infinite;
+}
+/* List cards (DISK, DOCKER, VOLUMES): the .mon-skel rows handle the visual
+   themselves — make them slightly varied widths so the loading state reads
+   as multiple list items, not one fat bar. */
+.mon-card.loading .mon-list .mon-skel:nth-child(1) { width: 78%; }
+.mon-card.loading .mon-list .mon-skel:nth-child(2) { width: 92%; }
+.mon-card.loading .mon-list .mon-skel:nth-child(3) { width: 64%; }
+
+/* Cards that drill into modals get a hint cursor + subtle hover lift. */
+.mon-cpu, .mon-mem, .mon-disk { cursor: pointer; }
+.mon-cpu:hover, .mon-mem:hover, .mon-disk:hover {
+  border-color: var(--accent);
+}
+.mon-disk .mon-row { cursor: pointer; }
+
+/* ─── Processes modal ─── */
+.proc-body {
+  width: 760px;
+  max-width: 94vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.proc-head {
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.proc-head > span:first-child { flex-shrink: 0; }
+.proc-tabs {
+  display: flex;
+  gap: 0;
+  margin-left: auto;
+}
+.proc-tabs .seg {
+  background: transparent;
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+  padding: 4px 10px;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: all 0.1s;
+  border-radius: 0;
+  margin-left: -1px;
+}
+.proc-tabs .seg:first-child { margin-left: 0; }
+.proc-tabs .seg:hover { color: var(--text); }
+.proc-tabs .seg.active {
+  background: var(--accent);
+  color: var(--bg-0);
+  border-color: var(--accent);
+}
+.proc-close {
+  background: transparent;
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+  width: 22px; height: 22px;
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.proc-close:hover { border-color: var(--alert); color: var(--alert); }
+
+.proc-list-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.proc-grid {
+  display: grid;
+  grid-template-columns: 60px 90px 60px 60px 1fr;
+  gap: 10px;
+  padding: 5px 8px;
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  align-items: center;
+}
+.proc-header {
+  color: var(--text-4);
+  letter-spacing: 2px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+.proc-num { text-align: right; }
+.proc-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 200px;
+}
+.proc-row {
+  color: var(--text-2);
+  border-bottom: 1px solid var(--line);
+  transition: background 0.08s;
+}
+.proc-row:hover { background: var(--hover); }
+.proc-row.warm .proc-num { color: var(--warn); }
+.proc-row.hot  .proc-num { color: var(--alert); }
+.proc-cmd {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Disk drilldown modal ─── */
+.disk-body {
+  width: 760px;
+  max-width: 94vw;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+}
+.disk-head {
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+.disk-head > span:first-child { flex: 1; }
+.disk-close {
+  background: transparent;
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+  width: 22px; height: 22px;
+  font-size: 14px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.disk-close:hover { border-color: var(--alert); color: var(--alert); }
+.disk-bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+.disk-crumbs {
+  flex: 1;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  padding: 5px 10px;
+  font-family: var(--family-mono);
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+.disk-crumbs::-webkit-scrollbar { display: none; }
+.disk-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 240px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  padding: 8px;
+}
+.disk-total {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 2px;
+  padding: 4px 8px 10px;
+  border-bottom: 1px dashed var(--line);
+  margin-bottom: 8px;
+  text-align: right;
+}
+.disk-row {
+  position: relative;
+  padding: 7px 10px;
+  margin-bottom: 4px;
+  background: var(--bg-2);
+  cursor: default;
+  transition: background 0.08s;
+  overflow: hidden;
+}
+.disk-row.nav { cursor: pointer; }
+.disk-row.nav:hover { background: var(--hover); }
+.disk-row-bar {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+}
+.disk-row-fill {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  transition: width 0.4s;
+}
+.disk-row-line {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 12px;
+  font-family: var(--family-mono);
+  font-size: 11px;
+}
+.disk-row-size {
+  color: var(--accent-hot);
+  font-weight: 600;
+  text-align: right;
+  letter-spacing: 0.5px;
+}
+.disk-row-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.disk-foot {
+  margin-top: 10px;
+  text-align: center;
+}
+.disk-hint {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  color: var(--text-4);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
 /* ─── Context menu ─── */
 .ctx-menu {
   position: fixed;
@@ -1168,6 +2095,70 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   height: 1px;
   background: var(--line);
   margin: 4px 0;
+}
+
+/* ─── Host-key verification dialog ─── */
+.hostkey-body { width: 560px; max-width: 92vw; }
+.hostkey-body.danger { border-color: var(--alert); }
+.hostkey-body.danger .modal-header { color: var(--alert); }
+.hostkey-msg { margin-bottom: 14px; }
+.hostkey-host {
+  font-family: var(--family-mono);
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+.hostkey-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--family-mono);
+  font-size: 11px;
+}
+.hostkey-row:last-of-type { border-bottom: none; margin-bottom: 8px; }
+.hostkey-label {
+  color: var(--text-3);
+  letter-spacing: 2px;
+  font-size: 9px;
+}
+.hostkey-fp {
+  color: var(--accent-hot);
+  word-break: break-all;
+  user-select: text;
+}
+.hostkey-foot {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.hostkey-warn {
+  color: var(--alert);
+  font-family: var(--family-mono);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.hostkey-warn-foot {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-2);
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--alert);
+  background: color-mix(in srgb, var(--alert) 6%, transparent);
 }
 
 /* ─── Overwrite dialog ─── */
