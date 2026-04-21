@@ -22,10 +22,12 @@ const THEMES = [
       background: '#08080c', foreground: '#d0d0d5',
       cursor: '#9cb3d4', cursorAccent: '#08080c',
       selectionBackground: '#2a3548',
+      // Cyan was teal (#56b6c2) — close to green on dark bg. Pull it to the
+      // blue accent so banner matches the theme identity.
       black: '#0a0a0d', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
-      blue: '#6695c4', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
+      blue: '#6695c4', magenta: '#c678dd', cyan: '#6695c4', white: '#abb2bf',
       brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#98c379', brightYellow: '#e5c07b',
-      brightBlue: '#9cb3d4', brightMagenta: '#c678dd', brightCyan: '#56b6c2', brightWhite: '#ffffff',
+      brightBlue: '#9cb3d4', brightMagenta: '#c678dd', brightCyan: '#9cb3d4', brightWhite: '#ffffff',
     },
   },
   {
@@ -34,10 +36,15 @@ const THEMES = [
       background: '#ffffff', foreground: '#1a1a1f',
       cursor: '#0066cc', cursorAccent: '#ffffff',
       selectionBackground: '#cde0f6',
-      black: '#0a0a0f', red: '#c0392b', green: '#0f8a3a', yellow: '#b07400',
-      blue: '#0066cc', magenta: '#8e44ad', cyan: '#0f8f7f', white: '#666670',
-      brightBlack: '#333340', brightRed: '#e74c3c', brightGreen: '#14a84a', brightYellow: '#d99600',
-      brightBlue: '#3498db', brightMagenta: '#9b59b6', brightCyan: '#16a085', brightWhite: '#0a0a0f',
+      // Cool blue-family light theme. Green/brightGreen were vivid emerald
+      // which is the most common "remote bash PS1" colour — on a white bg
+      // against the blue accent that looked wrong. Pull greens into teal so
+      // a `\e[1;32m` prompt blends without losing semantic distinction from
+      // blue info lines.
+      black: '#0a0a0f', red: '#c0392b', green: '#0a7285', yellow: '#b07400',
+      blue: '#0066cc', magenta: '#8e44ad', cyan: '#0066cc', white: '#666670',
+      brightBlack: '#333340', brightRed: '#e74c3c', brightGreen: '#1596ab', brightYellow: '#d99600',
+      brightBlue: '#3498db', brightMagenta: '#9b59b6', brightCyan: '#3498db', brightWhite: '#0a0a0f',
     },
   },
   {
@@ -173,10 +180,12 @@ const THEMES = [
       background: '#272822', foreground: '#f8f8f2',
       cursor: '#f92672', cursorAccent: '#272822',
       selectionBackground: '#49483e',
+      // Pink is the monokai hero — banner cyan points at pink accent.
+      // Classic blue/mint stay as secondary code-highlight colors.
       black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75',
-      blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2',
+      blue: '#66d9ef', magenta: '#ae81ff', cyan: '#f92672', white: '#f8f8f2',
       brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#a6e22e', brightYellow: '#fd971f',
-      brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#a1efe4', brightWhite: '#f9f8f5',
+      brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#ff4488', brightWhite: '#f9f8f5',
     },
   },
   {
@@ -185,10 +194,11 @@ const THEMES = [
       background: '#282828', foreground: '#ebdbb2',
       cursor: '#fe8019', cursorAccent: '#282828',
       selectionBackground: '#504945',
+      // Gruvbox hero is burnt orange. cyan → orange so banner matches.
       black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921',
-      blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
+      blue: '#458588', magenta: '#b16286', cyan: '#fe8019', white: '#a89984',
       brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26', brightYellow: '#fabd2f',
-      brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#8ec07c', brightWhite: '#ebdbb2',
+      brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#fabd2f', brightWhite: '#ebdbb2',
     },
   },
   {
@@ -197,10 +207,11 @@ const THEMES = [
       background: '#1e1e2e', foreground: '#cdd6f4',
       cursor: '#f5e0dc', cursorAccent: '#1e1e2e',
       selectionBackground: '#45475a',
+      // Catppuccin accent (CSS var) is pink #f5c2e7. cyan → pink accent.
       black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
-      blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+      blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#f5c2e7', white: '#bac2de',
       brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1', brightYellow: '#f9e2af',
-      brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+      brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#ffccee', brightWhite: '#a6adc8',
     },
   },
   {

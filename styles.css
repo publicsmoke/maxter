@@ -388,7 +388,7 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   border-color: var(--text-3);
 }
 .pin-boxes.shake { animation: shakeX 0.45s ease; }
-.pin-boxes.ok .pin-box { border-color: var(--ok); }
+.pin-boxes.ok .pin-box { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg-1)); }
 @keyframes shakeX {
   0%, 100% { transform: translateX(0); }
   20%, 60% { transform: translateX(-8px); }
@@ -405,7 +405,7 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   text-align: center;
 }
 .lock-status.err { color: var(--alert); }
-.lock-status.ok { color: var(--ok); }
+.lock-status.ok { color: var(--accent); }
 
 /* ─── Registry ─── */
 .srv-head {
@@ -2628,7 +2628,7 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   width: 2px;
   background: var(--accent);
 }
-.toast.ok::before { background: var(--ok); }
+.toast.ok::before { background: var(--accent); }
 .toast.err::before { background: var(--alert); }
 .toast.warn::before { background: var(--warn); }
 @keyframes toastIn {
