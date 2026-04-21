@@ -116,6 +116,12 @@
       <div class="tabs-bar" id="tabsBar">
         <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">«</button>
         <div class="tab-placeholder">NO ACTIVE SESSIONS</div>
+        <button class="lock-btn" id="lockBtn" aria-label="Lock workspace">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="square" stroke-linejoin="miter">
+            <rect x="5" y="11" width="14" height="10"/>
+            <path d="M8 11V7.5a4 4 0 0 1 8 0V11"/>
+          </svg>
+        </button>
       </div>
       <div class="workspace" id="workspace">
         <div class="splash" id="splash">
@@ -228,10 +234,10 @@
       <div class="lock-sub" id="lockSub">ENTER ACCESS CODE</div>
 
       <div class="pin-boxes" id="pinBoxes">
-        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-        <input class="pin-box" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+        <input class="pin-box" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
       </div>
 
       <div class="lock-status" id="lockStatus"></div>

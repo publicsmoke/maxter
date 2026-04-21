@@ -1,7 +1,7 @@
 {
-  "name": "nexus-term",
-  "version": "0.1.0",
-  "description": "Nexus Term — SSH/SFTP client with Starcraft-inspired cosmic UI",
+  "name": "maxter",
+  "version": "0.8.2",
+  "description": "Maxter — SSH/SFTP client with live monitoring panel and Starcraft-inspired UI",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('api', {
     write: (opts) => ipcRenderer.invoke('ssh:write', opts),
     resize: (opts) => ipcRenderer.invoke('ssh:resize', opts),
     disconnect: (opts) => ipcRenderer.invoke('ssh:disconnect', opts),
+    exec: (opts) => ipcRenderer.invoke('ssh:exec', opts),
     onData: (sessionId, cb) => {
       const ch = `ssh:data:${sessionId}`;
       const handler = (_e, data) => cb(data);
@@ -45,6 +46,11 @@ contextBridge.exposeInMainWorld('api', {
     upload: (opts) => ipcRenderer.invoke('sftp:upload', opts),
     sendFile: (opts) => ipcRenderer.invoke('sftp:sendFile', opts),
     getFile: (opts) => ipcRenderer.invoke('sftp:getFile', opts),
+    sendDir: (opts) => ipcRenderer.invoke('sftp:sendDir', opts),
+    getDir: (opts) => ipcRenderer.invoke('sftp:getDir', opts),
+    exists: (opts) => ipcRenderer.invoke('sftp:exists', opts),
+    readFile: (opts) => ipcRenderer.invoke('sftp:readFile', opts),
+    writeFile: (opts) => ipcRenderer.invoke('sftp:writeFile', opts),
   },
   local: {
     home: () => ipcRenderer.invoke('local:home'),
@@ -52,6 +58,7 @@ contextBridge.exposeInMainWorld('api', {
     mkdir: (opts) => ipcRenderer.invoke('local:mkdir', opts),
     rename: (opts) => ipcRenderer.invoke('local:rename', opts),
     delete: (opts) => ipcRenderer.invoke('local:delete', opts),
+    exists: (opts) => ipcRenderer.invoke('local:exists', opts),
   },
   dialog: {
     pickKey: () => ipcRenderer.invoke('dialog:pickKey'),

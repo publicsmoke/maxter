@@ -190,7 +190,11 @@ ipcMain.handle('ssh:connect', (_e, { sessionId, server, cols, rows }) => {
       port: server.port || 22,
       username: server.username,
       readyTimeout: 20000,
-      keepaliveInterval: 30000,
+      // 8 s × 3 misses = ~24 s before ssh2 declares the link dead. Was 30 s
+      // with default count (3) = ~90 s, which left the UI showing "online"
+      // long after the network actually dropped.
+      keepaliveInterval: 8000,
+      keepaliveCountMax: 3,
     };
 
     if (server.authMethod === 'key' && server.privateKey) {
@@ -264,6 +268,36 @@ ipcMain.handle('ssh:resize', (_e, { sessionId, cols, rows }) => {
   const s = sessions.get(sessionId);
   if (s && s.stream) s.stream.setWindow(rows, cols);
   return true;
+});
+
+// One-shot command runner over the existing SSH connection. Used by the
+// monitor tab to poll /proc, df, docker stats, etc. without spawning a new
+// session. Rejects on non-zero exit only if there's no stdout — many tools
+// exit non-zero with useful partial output (e.g., df with permission denied
+// on some mounts), which we still want to show.
+ipcMain.handle('ssh:exec', (_e, { sessionId, cmd, timeoutMs }) => {
+  return new Promise((resolve, reject) => {
+    const s = sessions.get(sessionId);
+    if (!s) return reject(new Error('No active session'));
+    s.conn.exec(cmd, (err, stream) => {
+      if (err) return reject(err);
+      let out = '', errOut = '', done = false;
+      const finish = (payload) => {
+        if (done) return;
+        done = true;
+        resolve(payload);
+      };
+      const killTimer = setTimeout(() => {
+        if (!done) { try { stream.close(); } catch (_) {} finish({ stdout: out, stderr: errOut, code: -1, timedOut: true }); }
+      }, timeoutMs || 8000);
+      stream.on('data', d => { out += d.toString('utf-8'); });
+      stream.stderr.on('data', d => { errOut += d.toString('utf-8'); });
+      stream.on('close', (code) => {
+        clearTimeout(killTimer);
+        finish({ stdout: out, stderr: errOut, code: code == null ? 0 : code, timedOut: false });
+      });
+    });
+  });
 });
 
 ipcMain.handle('ssh:disconnect', (_e, { sessionId }) => {
@@ -369,11 +403,21 @@ ipcMain.handle('sftp:upload', async (_e, { sessionId, remoteDir }) => {
 });
 
 ipcMain.handle('dock:setIcon', (_e, dataUrl) => {
-  if (process.platform !== 'darwin' || !app.dock) return false;
   try {
     const img = nativeImage.createFromDataURL(dataUrl);
-    if (!img.isEmpty()) app.dock.setIcon(img);
-    return true;
+    if (img.isEmpty()) return false;
+    if (process.platform === 'darwin' && app.dock) {
+      app.dock.setIcon(img);
+      return true;
+    }
+    if (process.platform === 'win32' && mainWindow && !mainWindow.isDestroyed()) {
+      // Taskbar + window icon while app is running. The baked-in .exe icon
+      // (visible in File Explorer when app is NOT running) still comes from
+      // build/icon.ico at package time.
+      mainWindow.setIcon(img);
+      return true;
+    }
+    return false;
   } catch (e) {
     return false;
   }
@@ -444,4 +488,88 @@ ipcMain.handle('sftp:getFile', async (_e, { sessionId, remotePath, localPath }) 
   return new Promise((resolve, reject) => {
     sftp.fastGet(remotePath, path.normalize(localPath), err => err ? reject(err) : resolve(true));
   });
+});
+
+// ssh2 doesn't ship a recursive copier, so we walk the tree ourselves and
+// fan out fastPut/fastGet per file. Symlinks are skipped — chasing them is a
+// foot-gun (loops, escapes outside the source tree).
+function sftpMkdirIfMissing(sftp, p) {
+  return new Promise((resolve, reject) => {
+    sftp.mkdir(p, err => {
+      if (!err) return resolve();
+      // ssh2 returns code 4 ("Failure") for "already exists" on most servers;
+      // treat any "already there" as success by stat-ing afterwards.
+      sftp.stat(p, statErr => statErr ? reject(err) : resolve());
+    });
+  });
+}
+
+async function sendDirRecursive(sftp, localDir, remoteDir) {
+  await sftpMkdirIfMissing(sftp, remoteDir);
+  const entries = await fs.promises.readdir(localDir, { withFileTypes: true });
+  for (const ent of entries) {
+    if (ent.name === '.' || ent.name === '..') continue;
+    const lp = path.join(localDir, ent.name);
+    const rp = path.posix.join(remoteDir, ent.name);
+    if (ent.isDirectory()) {
+      await sendDirRecursive(sftp, lp, rp);
+    } else if (ent.isFile()) {
+      await new Promise((res, rej) => sftp.fastPut(lp, rp, e => e ? rej(e) : res()));
+    }
+  }
+}
+
+async function getDirRecursive(sftp, remoteDir, localDir) {
+  await fs.promises.mkdir(localDir, { recursive: true });
+  const list = await new Promise((res, rej) => sftp.readdir(remoteDir, (e, l) => e ? rej(e) : res(l)));
+  for (const item of list) {
+    if (item.filename === '.' || item.filename === '..') continue;
+    const rp = path.posix.join(remoteDir, item.filename);
+    const lp = path.join(localDir, item.filename);
+    const isDir = (item.attrs.mode & 0o170000) === 0o040000;
+    const isLink = (item.attrs.mode & 0o170000) === 0o120000;
+    if (isLink) continue;
+    if (isDir) await getDirRecursive(sftp, rp, lp);
+    else await new Promise((res, rej) => sftp.fastGet(rp, lp, e => e ? rej(e) : res()));
+  }
+}
+
+ipcMain.handle('sftp:sendDir', async (_e, { sessionId, localPath, remotePath }) => {
+  const sftp = await getSftp(sessionId);
+  await sendDirRecursive(sftp, path.normalize(localPath), remotePath);
+  return true;
+});
+
+ipcMain.handle('sftp:getDir', async (_e, { sessionId, remotePath, localPath }) => {
+  const sftp = await getSftp(sessionId);
+  await getDirRecursive(sftp, remotePath, path.normalize(localPath));
+  return true;
+});
+
+// Whole-file read/write for the file editor. Capped at 5 MB so a misclick on
+// a giant log doesn't pull the renderer into an OOM. ssh2 sftp.readFile
+// returns a Buffer; we decode UTF-8 here (the editor is text-only).
+ipcMain.handle('sftp:readFile', async (_e, { sessionId, path: p, maxBytes }) => {
+  const sftp = await getSftp(sessionId);
+  const limit = maxBytes || 5 * 1024 * 1024;
+  const stat = await new Promise((res, rej) => sftp.stat(p, (e, s) => e ? rej(e) : res(s)));
+  if (stat.size > limit) throw new Error(`File too large (${stat.size} bytes; limit ${limit})`);
+  const buf = await new Promise((res, rej) => sftp.readFile(p, (e, b) => e ? rej(e) : res(b)));
+  return { content: buf.toString('utf-8'), size: stat.size, mtime: stat.mtime };
+});
+
+ipcMain.handle('sftp:writeFile', async (_e, { sessionId, path: p, content }) => {
+  const sftp = await getSftp(sessionId);
+  await new Promise((res, rej) => sftp.writeFile(p, Buffer.from(content, 'utf-8'), e => e ? rej(e) : res()));
+  return true;
+});
+
+ipcMain.handle('sftp:exists', async (_e, { sessionId, path: p }) => {
+  const sftp = await getSftp(sessionId);
+  return new Promise(resolve => sftp.stat(p, err => resolve(!err)));
+});
+
+ipcMain.handle('local:exists', async (_e, { path: p }) => {
+  try { await fs.promises.access(path.normalize(p)); return true; }
+  catch { return false; }
 });
