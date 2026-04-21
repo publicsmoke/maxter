@@ -188,6 +188,56 @@ button { font-family: inherit; }
 }
 .btn-add:hover .plus { color: var(--accent-hot); }
 
+/* ─── Custom window chrome (macOS traffic-light replacement + Windows
+ * min/max/close — frameless BrowserWindow everywhere, we paint our own). */
+.win-chrome {
+  -webkit-app-region: no-drag;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 14px 0 14px;
+  height: 100%;
+  flex-shrink: 0;
+}
+.win-btn {
+  -webkit-app-region: no-drag;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;     /* icon only visible on chrome hover */
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.win-btn svg {
+  width: 8px;
+  height: 8px;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  fill: none;
+  pointer-events: none;
+}
+.win-btn .win-ico-max rect,
+.win-btn .win-ico-restore rect {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+}
+.win-chrome:hover .win-btn { color: var(--bg-0); }
+.win-close { background: color-mix(in srgb, var(--alert) 75%, transparent); border-color: var(--alert); }
+.win-min   { background: color-mix(in srgb, var(--warn) 75%, transparent);  border-color: var(--warn);  }
+.win-max   { background: color-mix(in srgb, var(--accent) 75%, transparent); border-color: var(--accent); }
+.win-close:hover { background: var(--alert); }
+.win-min:hover   { background: var(--warn); }
+.win-max:hover   { background: var(--accent); }
+
 /* ─── Sidebar toggle ─── */
 .sidebar-toggle {
   -webkit-app-region: no-drag;
@@ -1540,18 +1590,6 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   text-transform: uppercase;
   flex-shrink: 0;
 }
-.editor-close {
-  background: transparent;
-  border: 1px solid var(--line-2);
-  color: var(--text-3);
-  width: 22px; height: 22px;
-  font-size: 14px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.editor-close:hover { border-color: var(--alert); color: var(--alert); }
 .editor-body-inner {
   flex: 1;
   display: flex;

@@ -1,6 +1,6 @@
 {
   "name": "maxter",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "description": "Maxter — portable SSH/SFTP client for Windows",
   "author": "Maxter",
   "main": "main.js",
