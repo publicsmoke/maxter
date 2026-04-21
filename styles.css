@@ -762,7 +762,7 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   justify-content: center;
   flex-shrink: 0;
   opacity: 0;               /* hidden until the tab is hovered/active */
-  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+  transition: opacity 0.12s, color 0.12s, background 0.12s;
   border-radius: 0;
 }
 .tab-close svg {
@@ -771,11 +771,12 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   display: block;
 }
 .tab:hover .tab-close,
-.tab.active .tab-close { opacity: 1; }
+.tab.active .tab-close { opacity: 1; color: var(--accent); }
+/* Closing a tab isn't destructive enough to warrant alert-red. Soft accent
+   hover — quiet, on-theme. */
 .tab-close:hover {
-  color: var(--alert);
-  border-color: var(--alert);
-  background: color-mix(in srgb, var(--alert) 10%, transparent);
+  color: var(--accent-hot);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .workspace {
