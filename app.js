@@ -2142,13 +2142,21 @@ async function pollSlow(sessionId) {
     // nginx sites: walk both classic Debian layout AND conf.d via `find`
     // (more reliable than glob — handles missing dirs, permission gaps).
     // For each file emit `=== <full-path>` so renderer can open editor on
-    // click, then the server_name + listen lines.
+    // click, then the server_name + listen lines. Also probe nginx.conf
+    // itself — minimal setups put server blocks directly there instead of
+    // splitting into separate site files.
     execOut(sessionId,
       "find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 1 -type f 2>/dev/null | while read f; do " +
       "echo \"=== $f\"; " +
       "grep -hE '^[[:space:]]*(server_name|listen)[[:space:]]' \"$f\" 2>/dev/null | sed 's/^[[:space:]]*//; s/;.*//'; " +
       "done; " +
-      "[ -f /etc/nginx/nginx.conf ] && echo '___MAIN___/etc/nginx/nginx.conf'",
+      "if [ -f /etc/nginx/nginx.conf ]; then " +
+      "  echo '___MAIN___/etc/nginx/nginx.conf'; " +
+      "  if grep -qE '^[[:space:]]*server[[:space:]]*\\{' /etc/nginx/nginx.conf 2>/dev/null; then " +
+      "    echo '=== /etc/nginx/nginx.conf'; " +
+      "    grep -hE '^[[:space:]]*(server_name|listen)[[:space:]]' /etc/nginx/nginx.conf 2>/dev/null | sed 's/^[[:space:]]*//; s/;.*//'; " +
+      "  fi; " +
+      "fi",
       5000),
     // Firewall rules — INPUT chain only. iptables works for non-root in
     // some kernels (rare) but usually needs sudo. Skip sudo unless user
@@ -2594,7 +2602,16 @@ function renderSites(sess, raw, code, sessionId) {
     sub.textContent = '';
     return;
   }
-  // sub gets the main config link if we found nginx.conf — clickable.
+  if (!sites.length && mainConf) {
+    // Pure config-only nginx (no sites-enabled, all in nginx.conf without a
+    // server block grep matches). Don't shout "0 sites" — point at nginx.conf.
+    list.innerHTML = '<div class="mon-empty">no separate sites · open nginx.conf to edit</div>';
+    sub.innerHTML = `<a class="mon-site-mainconf" data-path="${escapeHtml(mainConf)}">nginx.conf</a>`;
+    const mc = sub.querySelector('.mon-site-mainconf');
+    if (mc) mc.addEventListener('click', (e) => { e.stopPropagation(); showFileEditor(sessionId, mc.dataset.path); });
+    sess.monitor.seen.sites = true;
+    return;
+  }
   sub.innerHTML = mainConf
     ? `${sites.length} site${sites.length === 1 ? '' : 's'} · <a class="mon-site-mainconf" data-path="${escapeHtml(mainConf)}">nginx.conf</a>`
     : `${sites.length} site${sites.length === 1 ? '' : 's'}`;
