@@ -3227,6 +3227,8 @@ body.theme-carbon {
 }
 
 /* PAPER · pure light minimal */
+/* Paper — monochrome print aesthetic. --ok / --warn kept black-ish so any
+   stray UI using them stays on-theme. --alert keeps red for error semantic. */
 body.theme-paper {
   --bg-0: #ffffff;
   --bg-1: #fafafa;
@@ -3247,8 +3249,8 @@ body.theme-paper {
   --text-4: #c8c8c8;
   --accent: #1a1a1a;
   --accent-hot: #000000;
-  --ok: #2e7d32;
-  --warn: #ef6c00;
+  --ok: #1a1a1a;
+  --warn: #525252;
   --alert: #c62828;
   --backdrop:
     radial-gradient(ellipse at 15% 8%, rgba(0,0,0,0.02) 0, transparent 55%),

@@ -274,10 +274,13 @@ const THEMES = [
       background: '#ffffff', foreground: '#1a1a1a',
       cursor: '#1a1a1a', cursorAccent: '#ffffff',
       selectionBackground: '#dcdcdc',
-      black: '#0a0a0a', red: '#c62828', green: '#2e7d32', yellow: '#ef6c00',
-      blue: '#1565c0', magenta: '#6a1b9a', cyan: '#00838f', white: '#525252',
-      brightBlack: '#333333', brightRed: '#d32f2f', brightGreen: '#388e3c', brightYellow: '#f57c00',
-      brightBlue: '#1976d2', brightMagenta: '#7b1fa2', brightCyan: '#0097a7', brightWhite: '#1a1a1a',
+      // Monochrome print aesthetic — all ANSI colours are greys, only red
+      // stays coloured so errors still read as errors. Matches the black
+      // swatch in the theme picker and the "black ink on white paper" idea.
+      black: '#0a0a0a', red: '#c62828', green: '#444444', yellow: '#666666',
+      blue: '#2a2a2a', magenta: '#3a3a3a', cyan: '#1a1a1a', white: '#525252',
+      brightBlack: '#333333', brightRed: '#d32f2f', brightGreen: '#5a5a5a', brightYellow: '#7a7a7a',
+      brightBlue: '#3a3a3a', brightMagenta: '#4a4a4a', brightCyan: '#2a2a2a', brightWhite: '#1a1a1a',
     },
   },
   {
@@ -1051,7 +1054,6 @@ function renderTabs() {
     el.innerHTML = `
       ${seqMarkup}
       <span class="tab-name">${escapeHtml(s.server.name || s.server.host)}</span>
-      <span class="tab-sub">${escapeHtml(s.server.host)}</span>
       <button class="tab-close" title="Disconnect" aria-label="Disconnect">
         <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
           <path d="M2 2l6 6M8 2l-6 6"/>
