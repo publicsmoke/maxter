@@ -3,9 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' https://cdn.jsdelivr.net; img-src 'self' data:;">
+    content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:;">
   <title>MAXTER</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <!-- xterm.js: vendored locally (was jsDelivr CDN, removed for supply-chain safety) -->
+  <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Black+Ops+One&family=Bungee&family=Chakra+Petch:wght@400;600;700&family=Exo+2:wght@400;600;700&family=Fira+Code:wght@400;500&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&family=Iceberg&family=Inconsolata:wght@400;500&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Major+Mono+Display&family=Michroma&family=Monoton&family=Orbitron:wght@400;600;900&family=Press+Start+2P&family=Rajdhani:wght@400;500;600;700&family=Righteous&family=Russo+One&family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Syncopate:wght@400;700&family=Teko:wght@400;500;600;700&family=Unica+One&family=VT323&display=swap" rel="stylesheet">
@@ -246,8 +247,8 @@
 
   <div class="toast-host" id="toastHost"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

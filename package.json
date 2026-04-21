@@ -9,6 +9,8 @@
     "brand": "node scripts/brand-electron.js"
   },
   "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "ssh2": "^1.15.0"
   },
   "devDependencies": {

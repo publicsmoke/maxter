@@ -82,10 +82,69 @@ app.on('window-all-closed', () => {
 
 // --- Config management ---
 
+// --- Servers file encryption ---
+//
+// After the PIN check succeeds we derive a 256-bit key from the PIN (PBKDF2
+// with a separate salt from auth.json) and keep it in main-process RAM only.
+// servers.json is then AES-256-GCM encrypted on disk. This closes the
+// biggest leak: previously, anyone who could read the userData folder and
+// was logged in as the same OS user could decrypt passwords via safeStorage
+// without knowing the PIN.
+//
+// On-disk envelope (JSON, pretty-printed so git diff readable):
+//   { "v": 1, "alg": "aes-256-gcm", "iv": "<b64>", "tag": "<b64>", "data": "<b64>" }
+// Legacy unencrypted (plain array) is still accepted on read and re-saved
+// encrypted as soon as PIN is verified (silent migration).
+
+let _serversKey = null;          // Buffer(32) or null if PIN not entered yet
+
+function deriveServersKey(pin, encSalt) {
+  return crypto.pbkdf2Sync(pin, encSalt, 200000, 32, 'sha256');
+}
+
+function encryptJSON(key, obj) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([
+    cipher.update(JSON.stringify(obj), 'utf-8'),
+    cipher.final(),
+  ]);
+  return {
+    v: 1,
+    alg: 'aes-256-gcm',
+    iv: iv.toString('base64'),
+    tag: cipher.getAuthTag().toString('base64'),
+    data: ct.toString('base64'),
+  };
+}
+
+function decryptJSON(key, blob) {
+  if (!blob || blob.alg !== 'aes-256-gcm') throw new Error('bad envelope');
+  const iv = Buffer.from(blob.iv, 'base64');
+  const tag = Buffer.from(blob.tag, 'base64');
+  const ct = Buffer.from(blob.data, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
+  return JSON.parse(pt.toString('utf-8'));
+}
+
 function loadServers() {
   try {
     if (!fs.existsSync(CONFIG_FILE())) return [];
-    const data = JSON.parse(fs.readFileSync(CONFIG_FILE(), 'utf-8'));
+    const raw = fs.readFileSync(CONFIG_FILE(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    let data;
+    // Envelope shape (encrypted) vs raw array (legacy unencrypted).
+    if (parsed && parsed.v === 1 && parsed.alg) {
+      if (!_serversKey) return [];  // PIN not verified yet; nothing to show
+      try { data = decryptJSON(_serversKey, parsed); }
+      catch (e) { return []; }
+    } else if (Array.isArray(parsed)) {
+      data = parsed;
+    } else {
+      return [];
+    }
     return data.map(s => {
       const out = { ...s };
       if (out.encPassword && safeStorage.isEncryptionAvailable()) {
@@ -125,7 +184,13 @@ function saveServers(servers) {
     return copy;
   });
   fs.mkdirSync(CONFIG_DIR(), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE(), JSON.stringify(toSave, null, 2));
+  // If we have the PIN-derived key, wrap the whole array in AES-GCM. Otherwise
+  // (e.g., very first run before PIN is set up) fall back to plain so the
+  // user isn't locked out — auth:setPin re-saves encrypted.
+  const payload = _serversKey
+    ? JSON.stringify(encryptJSON(_serversKey, toSave), null, 2)
+    : JSON.stringify(toSave, null, 2);
+  fs.writeFileSync(CONFIG_FILE(), payload);
 }
 
 ipcMain.handle('servers:list', () => loadServers());
@@ -159,25 +224,61 @@ ipcMain.handle('auth:status', () => {
 ipcMain.handle('auth:setPin', (_e, { pin }) => {
   if (!pin || pin.length < 4) throw new Error('PIN must be at least 4 digits');
   const salt = crypto.randomBytes(16).toString('hex');
+  const encSalt = crypto.randomBytes(16).toString('hex');
   const iterations = 120000;
   const pinHash = hashPin(pin, salt, iterations);
-  saveAuth({ pinHash, salt, iterations, createdAt: Date.now() });
+  saveAuth({ pinHash, salt, encSalt, iterations, createdAt: Date.now() });
   authVerified = true;
+  _serversKey = deriveServersKey(pin, encSalt);
+  // Re-save any existing (legacy-plaintext) servers.json encrypted now.
+  try {
+    const existing = loadServers();
+    if (existing.length) saveServers(existing);
+  } catch (_) {}
   return true;
 });
 
-ipcMain.handle('auth:verify', (_e, { pin }) => {
+// Simple brute-force mitigation: delay every verify call by the number of
+// consecutive failures already seen this process. Cleared on success. Not a
+// replacement for strong PINs but slows scripted grinding.
+let _verifyFailCount = 0;
+const verifyDelay = () => new Promise(r => setTimeout(r, Math.min(_verifyFailCount, 10) * 500));
+
+ipcMain.handle('auth:verify', async (_e, { pin }) => {
+  await verifyDelay();
   const a = loadAuth();
   if (!a) return false;
   const h = hashPin(pin, a.salt, a.iterations || 120000);
   const ok = crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(a.pinHash, 'hex'));
-  if (ok) authVerified = true;
+  if (ok) {
+    authVerified = true;
+    _verifyFailCount = 0;
+    // Derive the file-encryption key. If an old auth.json without encSalt
+    // exists, generate one now and persist — legacy file will be rewritten
+    // encrypted on the next saveServers.
+    let encSalt = a.encSalt;
+    if (!encSalt) {
+      encSalt = crypto.randomBytes(16).toString('hex');
+      saveAuth({ ...a, encSalt });
+    }
+    _serversKey = deriveServersKey(pin, encSalt);
+    // Migrate legacy plaintext servers.json → encrypted on first successful
+    // login after upgrade.
+    try {
+      const existing = loadServers();
+      if (existing.length) saveServers(existing);
+    } catch (_) {}
+  } else {
+    _verifyFailCount++;
+  }
   return ok;
 });
 
 ipcMain.handle('auth:reset', () => {
   try { fs.unlinkSync(AUTH_FILE()); } catch (e) {}
   authVerified = false;
+  _serversKey = null;
+  _verifyFailCount = 0;
   return true;
 });
 
