@@ -678,39 +678,56 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
 
 .tab {
   -webkit-app-region: no-drag;
-  display: flex; align-items: center; gap: 10px;
-  padding: 13px 18px 13px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  margin: 4px 0 0 4px;
   background: transparent;
-  border-left: 1px solid var(--line);
   cursor: pointer;
   font-size: 11px;
   letter-spacing: 1px;
   min-width: 180px;
   max-width: 240px;
-  transition: background 0.12s, color 0.12s;
-  position: relative;
   color: var(--text-3);
+  transition: color 0.12s, background 0.12s;
 }
-/* Close the right edge of the last tab — cleaner than a dangling open side */
-.tab:last-of-type {
-  border-right: 1px solid var(--line);
-}
-.tab:hover {
-  background: var(--hover);
-  color: var(--text-2);
-}
-.tab.active {
-  background: var(--bg-1);
-  color: var(--text);
-}
-/* Sharp top accent bar — no glow, clean industrial look */
-.tab.active::before {
+/* Subtle dim divider between adjacent inactive tabs — no full borders. */
+.tab + .tab::before {
   content: '';
   position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: var(--accent);
+  left: -2px;
+  top: 30%;
+  bottom: 30%;
+  width: 1px;
+  background: var(--line);
 }
+.tab:hover { color: var(--text-2); background: var(--hover); }
+.tab.active {
+  color: var(--text);
+  background: var(--bg-0);
+  margin-bottom: -1px;     /* visually overlaps the bar's bottom border */
+}
+.tab.active + .tab::before,
+.tab.active::before { display: none; }
+/* Active tab gets the same corner-frame as cards: top-left, top-right, and
+   bottom-left/right that REACH DOWN past the tabs-bar so the tab "owns" the
+   workspace below — same trick used elsewhere in the app. Drawn via two
+   stacked pseudo-elements (one per top corner). */
+.tab.active::before,
+.tab.active::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-style: solid;
+  border-color: var(--accent);
+  display: block;
+  pointer-events: none;
+}
+.tab.active::before { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.tab.active::after  { top: 0; right: 0; border-width: 1px 1px 0 0; }
 .tab-seq {
   font-family: var(--family-mono);
   font-size: 10px;

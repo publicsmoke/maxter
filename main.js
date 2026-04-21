@@ -92,35 +92,65 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// --- Config management ---
+// --- Config management + PIN-derived file encryption ---
+// See main worktree's main.js for rationale. In portable mode the userData
+// folder lives next to the .exe on the host filesystem — file-level
+// encryption is especially important there (no Keychain / DPAPI guarantee
+// if the folder is carried between machines on a USB stick).
+
+let _serversKey = null;
+
+function deriveServersKey(pin, encSalt) {
+  return crypto.pbkdf2Sync(pin, encSalt, 200000, 32, 'sha256');
+}
+
+function encryptJSON(key, obj) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([cipher.update(JSON.stringify(obj), 'utf-8'), cipher.final()]);
+  return { v: 1, alg: 'aes-256-gcm', iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: ct.toString('base64') };
+}
+
+function decryptJSON(key, blob) {
+  if (!blob || blob.alg !== 'aes-256-gcm') throw new Error('bad envelope');
+  const iv = Buffer.from(blob.iv, 'base64');
+  const tag = Buffer.from(blob.tag, 'base64');
+  const ct = Buffer.from(blob.data, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
+  return JSON.parse(pt.toString('utf-8'));
+}
 
 function loadServers() {
   try {
     if (!fs.existsSync(CONFIG_FILE())) return [];
-    const data = JSON.parse(fs.readFileSync(CONFIG_FILE(), 'utf-8'));
+    const raw = fs.readFileSync(CONFIG_FILE(), 'utf-8');
+    const parsed = JSON.parse(raw);
+    let data;
+    if (parsed && parsed.v === 1 && parsed.alg) {
+      if (!_serversKey) return [];
+      try { data = decryptJSON(_serversKey, parsed); } catch (e) { return []; }
+    } else if (Array.isArray(parsed)) {
+      data = parsed;
+    } else {
+      return [];
+    }
     return data.map(s => {
       const out = { ...s };
       if (out.encPassword && safeStorage.isEncryptionAvailable()) {
-        try {
-          out.password = safeStorage.decryptString(Buffer.from(out.encPassword, 'base64'));
-        } catch (e) {
-          out.password = '';
-        }
-      } else if (out.encPassword) {
-        out.password = '';
-      }
+        try { out.password = safeStorage.decryptString(Buffer.from(out.encPassword, 'base64')); }
+        catch (e) { out.password = ''; }
+      } else if (out.encPassword) { out.password = ''; }
       if (out.encPassphrase && safeStorage.isEncryptionAvailable()) {
-        try {
-          out.passphrase = safeStorage.decryptString(Buffer.from(out.encPassphrase, 'base64'));
-        } catch (e) { out.passphrase = ''; }
+        try { out.passphrase = safeStorage.decryptString(Buffer.from(out.encPassphrase, 'base64')); }
+        catch (e) { out.passphrase = ''; }
       }
       delete out.encPassword;
       delete out.encPassphrase;
       return out;
     });
-  } catch (e) {
-    return [];
-  }
+  } catch (e) { return []; }
 }
 
 function saveServers(servers) {
@@ -137,7 +167,10 @@ function saveServers(servers) {
     return copy;
   });
   fs.mkdirSync(CONFIG_DIR(), { recursive: true });
-  fs.writeFileSync(CONFIG_FILE(), JSON.stringify(toSave, null, 2));
+  const payload = _serversKey
+    ? JSON.stringify(encryptJSON(_serversKey, toSave), null, 2)
+    : JSON.stringify(toSave, null, 2);
+  fs.writeFileSync(CONFIG_FILE(), payload);
 }
 
 ipcMain.handle('servers:list', () => loadServers());
@@ -171,25 +204,46 @@ ipcMain.handle('auth:status', () => {
 ipcMain.handle('auth:setPin', (_e, { pin }) => {
   if (!pin || pin.length < 4) throw new Error('PIN must be at least 4 digits');
   const salt = crypto.randomBytes(16).toString('hex');
+  const encSalt = crypto.randomBytes(16).toString('hex');
   const iterations = 120000;
   const pinHash = hashPin(pin, salt, iterations);
-  saveAuth({ pinHash, salt, iterations, createdAt: Date.now() });
+  saveAuth({ pinHash, salt, encSalt, iterations, createdAt: Date.now() });
   authVerified = true;
+  _serversKey = deriveServersKey(pin, encSalt);
+  try { const existing = loadServers(); if (existing.length) saveServers(existing); } catch (_) {}
   return true;
 });
 
-ipcMain.handle('auth:verify', (_e, { pin }) => {
+let _verifyFailCount = 0;
+const verifyDelay = () => new Promise(r => setTimeout(r, Math.min(_verifyFailCount, 10) * 500));
+
+ipcMain.handle('auth:verify', async (_e, { pin }) => {
+  await verifyDelay();
   const a = loadAuth();
   if (!a) return false;
   const h = hashPin(pin, a.salt, a.iterations || 120000);
   const ok = crypto.timingSafeEqual(Buffer.from(h, 'hex'), Buffer.from(a.pinHash, 'hex'));
-  if (ok) authVerified = true;
+  if (ok) {
+    authVerified = true;
+    _verifyFailCount = 0;
+    let encSalt = a.encSalt;
+    if (!encSalt) {
+      encSalt = crypto.randomBytes(16).toString('hex');
+      saveAuth({ ...a, encSalt });
+    }
+    _serversKey = deriveServersKey(pin, encSalt);
+    try { const existing = loadServers(); if (existing.length) saveServers(existing); } catch (_) {}
+  } else {
+    _verifyFailCount++;
+  }
   return ok;
 });
 
 ipcMain.handle('auth:reset', () => {
   try { fs.unlinkSync(AUTH_FILE()); } catch (e) {}
   authVerified = false;
+  _serversKey = null;
+  _verifyFailCount = 0;
   return true;
 });
 
