@@ -52,8 +52,13 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 620,
     backgroundColor: '#05070f',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    trafficLightPosition: { x: 16, y: 16 },
+    // Frameless across platforms — we paint our own window chrome (the 3
+    // buttons) in the tabs-bar so macOS traffic lights and Windows min/max/
+    // close don't break the themed aesthetic. thickFrame keeps native
+    // resize handles on Windows.
+    frame: false,
+    titleBarStyle: 'hidden',
+    thickFrame: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -61,7 +66,24 @@ function createWindow() {
     },
   });
   mainWindow.loadFile('index.html');
+
+  // Tell the renderer when the window gets maximized/unmaximized so the
+  // maximize button can swap its icon between "maximize" and "restore".
+  const fire = (state) => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('win:maximizeChanged', state);
+  };
+  mainWindow.on('maximize',   () => fire(true));
+  mainWindow.on('unmaximize', () => fire(false));
 }
+
+ipcMain.handle('win:minimize', () => mainWindow && mainWindow.minimize());
+ipcMain.handle('win:maximize', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMaximized()) mainWindow.unmaximize();
+  else mainWindow.maximize();
+});
+ipcMain.handle('win:close',       () => mainWindow && mainWindow.close());
+ipcMain.handle('win:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()));
 
 app.whenReady().then(() => {
   migrateStrayMaxterData();

@@ -66,6 +66,17 @@ contextBridge.exposeInMainWorld('api', {
   dock: {
     setIcon: (dataUrl) => ipcRenderer.invoke('dock:setIcon', dataUrl),
   },
+  win: {
+    minimize:   () => ipcRenderer.invoke('win:minimize'),
+    maximize:   () => ipcRenderer.invoke('win:maximize'),
+    close:      () => ipcRenderer.invoke('win:close'),
+    isMaximized: () => ipcRenderer.invoke('win:isMaximized'),
+    onMaximizeChanged: (cb) => {
+      const h = (_e, v) => cb(v);
+      ipcRenderer.on('win:maximizeChanged', h);
+      return () => ipcRenderer.removeListener('win:maximizeChanged', h);
+    },
+  },
   host: {
     onVerify: (cb) => {
       const handler = (_e, payload) => cb(payload);

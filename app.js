@@ -2248,7 +2248,28 @@ async function pollSlow(sessionId) {
   });
 
   renderDisk(sess, dfR.stdout || '');
-  renderDocker(sess, containers, dpsAllR.code, sessionId);
+
+  // Probe which compose-project files actually exist on the remote — we
+  // don't want to render dead links for missing Dockerfile / .env. One
+  // shell round-trip for all candidates across all containers; results
+  // join the render call. If the probe is slow or errors, fall back to
+  // rendering without it (links just work best-effort).
+  const candidates = new Set();
+  containers.forEach(c => {
+    if (!c.compose || !c.compose.dir) return;
+    if (c.compose.configFile) candidates.add(c.compose.configFile);
+    else candidates.add(joinPath(c.compose.dir, 'docker-compose.yml'));
+    candidates.add(joinPath(c.compose.dir, '.env'));
+    candidates.add(joinPath(c.compose.dir, 'Dockerfile'));
+  });
+  let existingFiles = null;
+  if (candidates.size) {
+    const list = [...candidates].map(p => shellQuoteArg(p)).join(' ');
+    const r = await execOut(sessionId, `for f in ${list}; do [ -f "$f" ] && echo "$f"; done 2>/dev/null`, 4000);
+    existingFiles = new Set((r.stdout || '').split('\n').filter(Boolean));
+  }
+
+  renderDocker(sess, containers, dpsAllR.code, sessionId, existingFiles);
   renderPorts(sess, portsR.stdout || '', portsR.code, sessionId);
   renderSites(sess, sitesR.stdout || '', sitesR.code, sessionId);
   renderFirewall(sess, fwR.stdout || '', fwR.code, sessionId);
@@ -2305,7 +2326,7 @@ function renderDisk(sess, raw) {
   `).join('');
 }
 
-function renderDocker(sess, containers, code, sessionId) {
+function renderDocker(sess, containers, code, sessionId, existingFiles) {
   const card = sess.monitorEl.querySelector('.mon-docker');
   const list = card.querySelector('.mon-list');
   const sub = card.querySelector('.mon-sub');
@@ -2352,12 +2373,20 @@ function renderDocker(sess, containers, code, sessionId) {
       else paths.push(joinPath(dir, 'docker-compose.yml'));
       paths.push(joinPath(dir, '.env'));
       paths.push(joinPath(dir, 'Dockerfile'));
+      // If we have an existence set from the probe, only render links for
+      // files that actually exist on disk. Without the set (probe errored /
+      // not run), fall back to showing everything — editor will report
+      // "could not read file" on click for missing ones.
       const seen = new Set();
-      const links = paths.filter(p => (seen.has(p) ? false : (seen.add(p), true)))
-        .map(p => {
-          const label = p.split('/').pop();
-          return `<a class="mon-ctr-file" data-path="${enc(p)}">${escapeHtml(label)}</a>`;
-        }).join(' · ');
+      const filtered = paths.filter(p => {
+        if (seen.has(p)) return false;
+        seen.add(p);
+        return existingFiles ? existingFiles.has(p) : true;
+      });
+      const links = filtered.map(p => {
+        const label = p.split('/').pop();
+        return `<a class="mon-ctr-file" data-path="${enc(p)}">${escapeHtml(label)}</a>`;
+      }).join(' · ');
       projLine = `
         <div class="mon-ctr-proj">
           <span class="mon-ctr-proj-icon">▸</span>
@@ -3116,7 +3145,6 @@ function showFileEditor(sessionId, remotePath) {
         <span class="editor-title">EDIT</span>
         <span class="editor-path"></span>
         <span class="editor-status"></span>
-        <button class="editor-close" aria-label="Close">×</button>
       </div>
       <div class="editor-body-inner">
         <div class="editor-gutter"></div>
@@ -3176,7 +3204,6 @@ function showFileEditor(sessionId, remotePath) {
     }
   }
 
-  back.querySelector('.editor-close').onclick = () => finish();
   back.querySelector('.editor-cancel').onclick = () => finish();
   back.addEventListener('click', (e) => { if (e.target === back) finish(); });
   document.addEventListener('keydown', onKey);
@@ -3851,6 +3878,27 @@ document.addEventListener('keydown', e => {
     setSidebarHidden(!document.body.classList.contains('sidebar-hidden'));
   }
 });
+
+// ─── Window chrome (custom replacement for traffic lights / min-max-close) ───
+(() => {
+  const close = $('#winClose');
+  const min   = $('#winMin');
+  const max   = $('#winMax');
+  if (!close || !min || !max) return;
+  close.addEventListener('click', () => window.api.win.close());
+  min.addEventListener('click',   () => window.api.win.minimize());
+  max.addEventListener('click',   () => window.api.win.maximize());
+  // Swap the max/restore glyph in sync with the window's actual state.
+  const icoMax     = max.querySelector('.win-ico-max');
+  const icoRestore = max.querySelector('.win-ico-restore');
+  const setMaxState = (maximized) => {
+    if (icoMax)     icoMax.hidden     = maximized;
+    if (icoRestore) icoRestore.hidden = !maximized;
+    max.title = maximized ? 'Restore' : 'Maximize';
+  };
+  window.api.win.isMaximized().then(setMaxState).catch(() => {});
+  window.api.win.onMaximizeChanged(setMaxState);
+})();
 
 // ─── Lock button ───
 function lockNow() {
