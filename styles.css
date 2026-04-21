@@ -1577,27 +1577,142 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   text-transform: uppercase;
 }
 
-/* ─── Listening port row: cursor + chevron, no dedicated button ─── */
+/* ─── Listening port row: explicit FW button on the right ─── */
 .mon-port-row {
-  grid-template-columns: 36px 70px 1fr 14px !important;
-  cursor: pointer;
-  transition: background 0.08s, padding 0.08s;
+  grid-template-columns: 36px 70px 1fr auto !important;
   padding-left: 6px !important;
   padding-right: 6px !important;
+  align-items: center;
 }
-.mon-port-row:hover {
-  background: var(--hover);
+.mon-port-fw {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  padding: 2px 8px;
+  height: 20px;
 }
-.mon-port-chev {
+
+/* ─── Add-rule modal (firewall) ─── */
+.addrule-body {
+  width: 560px;
+  max-width: 92vw;
+}
+.addrule-field {
+  margin-bottom: 14px;
+}
+.addrule-field label {
+  display: block;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
   color: var(--text-3);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.addrule-opt {
+  color: var(--text-4);
+  letter-spacing: 1px;
+  font-weight: 400;
+  margin-left: 4px;
+  text-transform: lowercase;
+}
+.addrule-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.addrule-help {
+  margin-top: 6px;
+  font-family: var(--family-mono);
+  font-size: 9px;
+  color: var(--text-4);
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+}
+.addrule-body input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  padding: 7px 10px;
+  font-family: var(--family-mono);
   font-size: 11px;
-  text-align: right;
-  transition: color 0.08s, transform 0.08s;
+  letter-spacing: 0.3px;
+  height: 30px;
+  outline: none;
+  border-radius: 0;
+  transition: border-color 0.1s;
 }
-.mon-port-row:hover .mon-port-chev {
+.addrule-body input:focus { border-color: var(--accent); }
+.addrule-body input::placeholder { color: var(--text-4); }
+
+/* Segmented buttons — themed, no native <select> ugliness. */
+.seg-group {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line-2);
+  background: var(--bg-0);
+  width: fit-content;
+}
+.seg-group .seg {
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--line-2);
+  color: var(--text-3);
+  padding: 7px 14px;
+  font-family: var(--family-mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  border-radius: 0;
+  min-width: 64px;
+  height: 30px;
+}
+.seg-group .seg:last-child { border-right: none; }
+.seg-group .seg:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.seg-group .seg.active {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+
+.addrule-preview {
+  margin-top: 4px;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px dashed var(--line-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.addrule-preview-label {
+  font-family: var(--family-mono);
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--text-4);
+}
+.addrule-preview-cmd {
+  font-family: var(--family-mono);
+  font-size: 11px;
   color: var(--accent-hot);
-  transform: translateX(2px);
+  letter-spacing: 0.3px;
+  word-break: break-all;
 }
+
+/* ADD RULE link in the firewall card sub */
+.mon-fw-add {
+  color: var(--accent-hot);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.1s;
+}
+.mon-fw-add:hover { border-bottom-color: var(--accent); }
 
 /* ─── Volume ↔ container cross-links + flash highlight ─── */
 .mon-vol-user, .mon-ctr-vol {

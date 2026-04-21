@@ -2125,41 +2125,41 @@ async function pollSlow(sessionId) {
     // sources; named volumes appear as a bare name, bind mounts as absolute
     // paths (we filter those out by leading slash).
     execOut(sessionId, "docker ps -a --format '{{.Names}}|{{.Mounts}}' 2>/dev/null", 5000),
-    // Listening sockets. ss -tlnp / -ulnp give TCP/UDP listeners. The
-    // "users:" column with PID/process needs root to see other users'
-    // processes. Try the privileged path (uses cached sudo password if the
-    // user enabled sudo this session) and fall back to plain ss otherwise.
-    // Wrapped in withPath because SSH non-interactive shells often miss
-    // /usr/sbin/ from PATH and ss "not found" silently.
+    // Listening sockets — ports list works for everyone without sudo;
+    // the proc/pid column requires root. So: skip sudo entirely unless
+    // the user has explicitly enrolled it (avoids hanging on slow PAM /
+    // LDAP `sudo -n` paths). withPath handles the common "/usr/sbin not
+    // in non-interactive PATH" gotcha.
+    (() => {
+      const sess0 = activeSessions.get(sessionId);
+      const havePwd = !!(sess0 && sess0._sudoPwd);
+      const tcp = havePwd ? withSudo('ss -tlnpH', sessionId) : 'ss -tlnpH';
+      const udp = havePwd ? withSudo('ss -ulnpH', sessionId) : 'ss -ulnpH';
+      return execOut(sessionId,
+        withPath(`${tcp} 2>/dev/null; echo '___UDP___'; ${udp} 2>/dev/null`),
+        6000);
+    })(),
+    // nginx sites: walk both classic Debian layout AND conf.d via `find`
+    // (more reliable than glob — handles missing dirs, permission gaps).
+    // For each file emit `=== <full-path>` so renderer can open editor on
+    // click, then the server_name + listen lines.
     execOut(sessionId,
-      withPath(
-        `(${withSudo('ss -tlnpH', sessionId)} 2>/dev/null || ss -tlnpH 2>/dev/null); ` +
-        `echo '___UDP___'; ` +
-        `(${withSudo('ss -ulnpH', sessionId)} 2>/dev/null || ss -ulnpH 2>/dev/null)`
-      ),
-      6000),
-    // nginx sites: scan both classic Debian layout and conf.d. Per file
-    // we emit the FULL path (so click→editor opens the right file) plus
-    // server_name and listen lines.
-    execOut(sessionId,
-      "for f in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do " +
-      "[ -f \"$f\" ] || continue; " +
+      "find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 1 -type f 2>/dev/null | while read f; do " +
       "echo \"=== $f\"; " +
       "grep -hE '^[[:space:]]*(server_name|listen)[[:space:]]' \"$f\" 2>/dev/null | sed 's/^[[:space:]]*//; s/;.*//'; " +
-      "done 2>/dev/null; " +
+      "done; " +
       "[ -f /etc/nginx/nginx.conf ] && echo '___MAIN___/etc/nginx/nginx.conf'",
       5000),
-    // Firewall rules — INPUT chain only (most relevant for "who can reach
-    // me"). -S spits rules in iptables-restore syntax which is easy to
-    // parse. Uses cached sudo password if available; otherwise sudo -n
-    // (NOPASSWD); otherwise plain (usually empty for unprivileged users).
-    // withPath because iptables typically lives in /usr/sbin or /sbin,
-    // which non-interactive SSH shells often skip.
-    execOut(sessionId,
-      withPath(
-        `(${withSudo('iptables -S INPUT', sessionId)} 2>/dev/null || iptables -S INPUT 2>/dev/null)`
-      ),
-      5000),
+    // Firewall rules — INPUT chain only. iptables works for non-root in
+    // some kernels (rare) but usually needs sudo. Skip sudo unless user
+    // has enrolled it; otherwise plain attempt — empty result triggers the
+    // "use sudo" link in the renderer.
+    (() => {
+      const sess0 = activeSessions.get(sessionId);
+      const havePwd = !!(sess0 && sess0._sudoPwd);
+      const cmd = havePwd ? withSudo('iptables -S INPUT', sessionId) : 'iptables -S INPUT';
+      return execOut(sessionId, withPath(`${cmd} 2>/dev/null`), 5000);
+    })(),
   ]);
 
   // Build {volumeName → [containerNames]} AND {containerName → [volumes]}
@@ -2496,33 +2496,31 @@ function renderPorts(sess, raw, code, sessionId) {
         <span class="mon-port-proto">${r.proto}</span>
         <span class="mon-port-num">:${escapeHtml(r.port)}</span>
         <span class="mon-port-proc" title="${escapeHtml(r.addr)}">${procHtml}</span>
-        <span class="mon-port-chev">▸</span>
+        <button class="row-btn mon-port-fw" data-act="fw" title="Firewall: block port, block IP, allow…">FW</button>
       </div>
     `;
   }).join('');
 
-  // Whole row click → firewall menu at the click point. Movement check
-  // (>4 px between down and up) tells "real click" from "drag to select" —
-  // we don't fire the menu mid-selection. We DON'T look at
-  // window.getSelection() because that would block clicks while text is
-  // selected anywhere else on the page.
+  // Explicit FW button on each row opens the firewall menu — text is
+  // selectable everywhere else, no "magic full-row click" guesswork.
   list.querySelectorAll('.mon-port-row').forEach(row => {
     const port = row.dataset.port;
     const proto = row.dataset.proto;
-    let dragStartX = 0, dragStartY = 0;
-    row.addEventListener('mousedown', (e) => { dragStartX = e.clientX; dragStartY = e.clientY; });
-    row.addEventListener('click', (e) => {
-      const moved = Math.abs(e.clientX - dragStartX) > 4 || Math.abs(e.clientY - dragStartY) > 4;
-      if (moved) return;
-      // Click on the "use sudo" link → enable sudo, not menu.
-      if (e.target.closest('.mon-port-sudo')) {
+    const fwBtn = row.querySelector('.mon-port-fw');
+    if (fwBtn) {
+      fwBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rect = fwBtn.getBoundingClientRect();
+        showFirewallMenu(rect.right, rect.bottom + 4, sessionId, port, proto);
+      });
+    }
+    const sudoLink = row.querySelector('.mon-port-sudo');
+    if (sudoLink) {
+      sudoLink.addEventListener('click', (e) => {
         e.stopPropagation();
         enableSudo(sessionId);
-        return;
-      }
-      const rect = row.getBoundingClientRect();
-      showFirewallMenu(rect.right, rect.bottom + 2, sessionId, port, proto);
-    });
+      });
+    }
   });
 }
 
@@ -2649,9 +2647,12 @@ function renderFirewall(sess, raw, code, sessionId) {
     list.innerHTML = sudoOn
       ? `<div class="mon-empty">no rules</div>`
       : `<div class="mon-empty">iptables not visible · <a class="mon-port-sudo mon-fw-sudo">use sudo</a></div>`;
-    sub.textContent = '';
+    // Even with no rules, expose ADD so user can populate from scratch.
+    sub.innerHTML = sudoOn ? `<a class="mon-fw-add">+ ADD RULE</a>` : '';
     if (!sudoOn) {
       list.querySelector('.mon-fw-sudo').addEventListener('click', () => enableSudo(sessionId));
+    } else {
+      sub.querySelector('.mon-fw-add').addEventListener('click', () => showAddRuleModal(sessionId));
     }
     return;
   }
@@ -2670,9 +2671,10 @@ function renderFirewall(sess, raw, code, sessionId) {
     }
   });
   // Render: policy at top + DROP/REJECT rules with × delete + ACCEPT rules
-  // dimmed (informational only).
+  // dimmed (informational only). The sub gets two action links: ADD a custom
+  // rule (modal form), and SAVE (persist to disk via netfilter-persistent).
   const summary = `policy ${policy || '?'} · ${rules.length} rule${rules.length === 1 ? '' : 's'}`;
-  sub.innerHTML = `${summary} · <a class="mon-fw-save">SAVE</a>`;
+  sub.innerHTML = `${summary} · <a class="mon-fw-add">+ ADD RULE</a> · <a class="mon-fw-save">SAVE</a>`;
 
   if (!rules.length) {
     list.innerHTML = '<div class="mon-empty">no rules · click a port row to add one</div>';
@@ -2711,6 +2713,8 @@ function renderFirewall(sess, raw, code, sessionId) {
   }
   const saveLink = sub.querySelector('.mon-fw-save');
   if (saveLink) saveLink.addEventListener('click', () => persistFirewall(sessionId));
+  const addLink = sub.querySelector('.mon-fw-add');
+  if (addLink) addLink.addEventListener('click', () => showAddRuleModal(sessionId));
 }
 
 // Per-port floating menu: block port-wide, block from a specific IP, or
@@ -2774,6 +2778,115 @@ async function runFirewallAction(act, sessionId, port, proto) {
   }
 }
 
+// Generic add-rule modal — when the per-port quick actions don't cover the
+// case (e.g. allow IP to specific port, custom protocol). Builds an
+// `iptables -I INPUT [...]` command from the form fields.
+function showAddRuleModal(sessionId) {
+  const back = document.createElement('div');
+  back.className = 'modal info-modal';
+  back.innerHTML = `
+    <div class="modal-body dialog-body addrule-body">
+      <span class="corner tl"></span><span class="corner tr"></span>
+      <span class="corner bl"></span><span class="corner br"></span>
+      <div class="modal-header">ADD FIREWALL RULE</div>
+
+      <div class="addrule-field">
+        <label>ACTION</label>
+        <div class="seg-group" data-name="action">
+          <button class="seg active" data-val="DROP"   type="button">DROP</button>
+          <button class="seg"        data-val="REJECT" type="button">REJECT</button>
+          <button class="seg"        data-val="ACCEPT" type="button">ACCEPT</button>
+        </div>
+        <div class="addrule-help">DROP — silently drop · REJECT — answer 'refused' · ACCEPT — allow through</div>
+      </div>
+
+      <div class="addrule-field">
+        <label>PROTOCOL</label>
+        <div class="seg-group" data-name="proto">
+          <button class="seg active" data-val=""     type="button">ANY</button>
+          <button class="seg"        data-val="tcp"  type="button">TCP</button>
+          <button class="seg"        data-val="udp"  type="button">UDP</button>
+          <button class="seg"        data-val="icmp" type="button">ICMP</button>
+        </div>
+      </div>
+
+      <div class="addrule-row">
+        <div class="addrule-field">
+          <label>SOURCE IP / CIDR <span class="addrule-opt">opt</span></label>
+          <input class="addrule-src" placeholder="e.g. 1.2.3.0/24">
+        </div>
+        <div class="addrule-field">
+          <label>DEST PORT <span class="addrule-opt">opt</span></label>
+          <input class="addrule-port" placeholder="e.g. 80" inputmode="numeric">
+        </div>
+      </div>
+
+      <div class="addrule-preview">
+        <span class="addrule-preview-label">PREVIEW</span>
+        <code class="addrule-preview-cmd"></code>
+      </div>
+
+      <div class="modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost addrule-cancel">CANCEL</button>
+        <button class="btn btn-primary addrule-apply">APPLY</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(back);
+
+  const state = { action: 'DROP', proto: '' };
+  const portEl = back.querySelector('.addrule-port');
+  const srcEl  = back.querySelector('.addrule-src');
+  const preview = back.querySelector('.addrule-preview-cmd');
+
+  // Wire seg-groups: clicking a button selects it (active) and updates state.
+  back.querySelectorAll('.seg-group').forEach(group => {
+    const name = group.dataset.name;
+    group.querySelectorAll('.seg').forEach(b => {
+      b.addEventListener('click', () => {
+        state[name] = b.dataset.val;
+        group.querySelectorAll('.seg').forEach(x => x.classList.toggle('active', x === b));
+        refresh();
+      });
+    });
+  });
+
+  function buildCmd() {
+    const parts = ['iptables', '-I', 'INPUT'];
+    let proto = state.proto;
+    // --dport requires -p tcp/udp. If user typed a port without picking a
+    // protocol, default to tcp so the rule is actually valid.
+    if (portEl.value.trim() && !proto) proto = 'tcp';
+    if (proto) parts.push('-p', proto);
+    if (srcEl.value.trim()) parts.push('-s', srcEl.value.trim());
+    if (portEl.value.trim()) parts.push('--dport', portEl.value.trim());
+    parts.push('-j', state.action);
+    return parts.join(' ');
+  }
+  function refresh() { preview.textContent = buildCmd(); }
+  [portEl, srcEl].forEach(el => el.addEventListener('input', refresh));
+  refresh();
+
+  const finish = () => {
+    document.removeEventListener('keydown', onEsc);
+    back.remove();
+  };
+  function onEsc(e) { if (e.key === 'Escape') finish(); }
+  back.querySelector('.addrule-cancel').onclick = finish;
+  back.addEventListener('click', e => { if (e.target === back) finish(); });
+  document.addEventListener('keydown', onEsc);
+
+  back.querySelector('.addrule-apply').onclick = async () => {
+    const port = portEl.value.trim();
+    const src = srcEl.value.trim();
+    if (port && !/^\d+$/.test(port)) { toast('Port must be a number', 'err'); return; }
+    if (src && !ipOk(src))           { toast('Invalid IP / CIDR', 'err'); return; }
+    finish();
+    await runIpt(sessionId, buildCmd());
+  };
+}
+
 async function deleteFirewallRule(sessionId, ruleLine) {
   const ok = await showConfirm(
     `Delete this rule?\n\n${ruleLine}`,
@@ -2816,9 +2929,11 @@ function withSudo(cmd, sessionId) {
 // Prepends sbin dirs to PATH for the wrapped command. Non-interactive SSH
 // shells often have a minimal PATH (just /usr/bin:/bin) so binaries like ss,
 // iptables, ip, nft live in /sbin or /usr/sbin and "command not found".
-// This helper makes them reachable without forcing a login shell.
+// We use `export` (not the `VAR=val cmd` form) so multi-statement command
+// chains — e.g. `cmd1; echo X; cmd2` — all see the new PATH, not just the
+// first command.
 function withPath(cmd) {
-  return `PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin" ${cmd}`;
+  return `export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"; ${cmd}`;
 }
 
 // One-shot sudo enrollment: prompt the user for the remote password, verify
