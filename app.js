@@ -739,6 +739,75 @@ function effectiveStartPath(server) {
   return p;
 }
 
+// Maps the raw ssh2/Node error string into something a human can act on.
+// Returns three flavours so we can use different copy in the terminal vs.
+// the toast (terminal has space for a hint line; toasts must be short).
+function humanizeSshError(raw) {
+  const msg = String(raw || '').toLowerCase();
+  if (msg.includes('all configured authentication methods failed') || msg.includes('authentication failed')) {
+    return {
+      toast: 'Wrong password or key — auth rejected',
+      term: 'AUTH REJECTED · password or key changed on the server',
+      hint: 'open the endpoint and re-enter the password / re-pick the key',
+    };
+  }
+  if (msg.includes('econnrefused')) {
+    return {
+      toast: 'Connection refused — port closed or sshd down',
+      term: 'CONNECTION REFUSED · nothing listening on that port',
+      hint: 'check the host:port and that sshd is running',
+    };
+  }
+  if (msg.includes('etimedout') || msg.includes('timed out')) {
+    return {
+      toast: 'Timed out — host unreachable',
+      term: 'TIMEOUT · host did not answer in 20 s',
+      hint: 'check VPN, firewall, or DNS',
+    };
+  }
+  if (msg.includes('enotfound') || msg.includes('getaddrinfo') || msg.includes('eai_again')) {
+    return {
+      toast: 'Host not found (DNS)',
+      term: 'DNS FAILURE · could not resolve hostname',
+      hint: 'check spelling or your network',
+    };
+  }
+  if (msg.includes('ehostunreach') || msg.includes('enetunreach')) {
+    return {
+      toast: 'Network unreachable',
+      term: 'NETWORK UNREACHABLE · no route to host',
+      hint: 'check VPN / interface',
+    };
+  }
+  if (msg.includes('handshake failed') || msg.includes('protocol version')) {
+    return {
+      toast: 'SSH handshake failed',
+      term: 'HANDSHAKE FAILED · server speaks a different SSH dialect',
+      hint: 'verify port, may be hitting a non-SSH service',
+    };
+  }
+  if (msg.includes('failed to read key')) {
+    return {
+      toast: 'Cannot read private key',
+      term: 'KEY READ FAILED · ' + raw,
+      hint: 'check the path and read permission',
+    };
+  }
+  if (msg.includes('key parse') || msg.includes('encrypted private')) {
+    return {
+      toast: 'Key needs a passphrase or is unsupported',
+      term: 'KEY PARSE FAILED · the file is encrypted or not in OpenSSH format',
+      hint: 'set the passphrase in the endpoint config',
+    };
+  }
+  // Fallback: prefix CONNECTION FAILED but keep the raw upstream text.
+  return {
+    toast: 'Connection failed: ' + raw,
+    term: 'CONNECTION FAILED · ' + raw,
+    hint: '',
+  };
+}
+
 async function connectServer(server, options = {}) {
   const { allowDuplicate = false } = options;
 
@@ -836,8 +905,10 @@ async function connectServer(server, options = {}) {
     sess.connected = false;
     setStatus(sess, 'fail');
     renderServerList();
-    term.writeln('\x1b[38;5;203m✗ CONNECTION FAILED · ' + (e.message || e) + '\x1b[0m');
-    toast('Connection failed: ' + (e.message || e), 'err');
+    const friendly = humanizeSshError(e.message || String(e));
+    term.writeln('\x1b[38;5;203m✗ ' + friendly.term + '\x1b[0m');
+    if (friendly.hint) term.writeln('\x1b[38;5;244m  ' + friendly.hint + '\x1b[0m');
+    toast(friendly.toast, 'err');
     return;
   }
 
@@ -1924,6 +1995,7 @@ function resetMonitorSkeleton(sess) {
   if (sess.monitor) {
     sess.monitor.prevCpu = null;        // re-prime CPU baseline
     sess.monitor.attempts = {};         // re-grant the empty-poll grace
+    sess.monitor.seen = {};             // drop stickiness — server may have changed
   }
 }
 
@@ -2057,10 +2129,14 @@ async function pollSlow(sessionId) {
     // "users:" column with PID/process needs root to see other users'
     // processes. Try the privileged path (uses cached sudo password if the
     // user enabled sudo this session) and fall back to plain ss otherwise.
+    // Wrapped in withPath because SSH non-interactive shells often miss
+    // /usr/sbin/ from PATH and ss "not found" silently.
     execOut(sessionId,
-      `(${withSudo('ss -tlnpH', sessionId)} 2>/dev/null || ss -tlnpH 2>/dev/null); ` +
-      `echo '___UDP___'; ` +
-      `(${withSudo('ss -ulnpH', sessionId)} 2>/dev/null || ss -ulnpH 2>/dev/null)`,
+      withPath(
+        `(${withSudo('ss -tlnpH', sessionId)} 2>/dev/null || ss -tlnpH 2>/dev/null); ` +
+        `echo '___UDP___'; ` +
+        `(${withSudo('ss -ulnpH', sessionId)} 2>/dev/null || ss -ulnpH 2>/dev/null)`
+      ),
       6000),
     // nginx sites: scan both classic Debian layout and conf.d. Per file
     // we emit the FULL path (so click→editor opens the right file) plus
@@ -2077,8 +2153,12 @@ async function pollSlow(sessionId) {
     // me"). -S spits rules in iptables-restore syntax which is easy to
     // parse. Uses cached sudo password if available; otherwise sudo -n
     // (NOPASSWD); otherwise plain (usually empty for unprivileged users).
+    // withPath because iptables typically lives in /usr/sbin or /sbin,
+    // which non-interactive SSH shells often skip.
     execOut(sessionId,
-      `(${withSudo('iptables -S INPUT', sessionId)} 2>/dev/null || iptables -S INPUT 2>/dev/null)`,
+      withPath(
+        `(${withSudo('iptables -S INPUT', sessionId)} 2>/dev/null || iptables -S INPUT 2>/dev/null)`
+      ),
       5000),
   ]);
 
@@ -2363,12 +2443,18 @@ function renderPorts(sess, raw, code, sessionId) {
   const card = sess.monitorEl.querySelector('.mon-ports');
   const list = card.querySelector('.mon-list');
   const sub = card.querySelector('.mon-sub');
-  card.classList.remove('loading');
+  sess.monitor.seen = sess.monitor.seen || {};
   if (!raw.trim()) {
+    if (sess.monitor.seen.ports) return;  // keep last good render
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.ports = (sess.monitor.attempts.ports || 0) + 1;
+    if (sess.monitor.attempts.ports < 2) return;
+    card.classList.remove('loading');
     list.innerHTML = `<div class="mon-empty">${code === 0 ? 'no listeners' : 'ss not available'}</div>`;
     sub.textContent = '';
     return;
   }
+  card.classList.remove('loading');
   const sections = raw.split('___UDP___');
   const tcpLines = (sections[0] || '').split('\n').filter(Boolean);
   const udpLines = (sections[1] || '').split('\n').filter(Boolean);
@@ -2390,7 +2476,8 @@ function renderPorts(sess, raw, code, sessionId) {
     return true;
   });
   unique.sort((a, b) => Number(a.port) - Number(b.port));
-  sub.textContent = `${unique.length} listener${unique.length > 1 ? 's' : ''} · click for firewall`;
+  sess.monitor.seen.ports = true;  // sticky from now on
+  sub.textContent = `${unique.length} listener${unique.length > 1 ? 's' : ''}`;
   // If we still don't see process info after a poll, sudo is probably needed.
   // Render "use sudo" as a clickable link in the proc column instead of a
   // dead "unknown" placeholder.
@@ -2467,18 +2554,22 @@ function renderSites(sess, raw, code, sessionId) {
   const card = sess.monitorEl.querySelector('.mon-sites');
   const list = card.querySelector('.mon-list');
   const sub = card.querySelector('.mon-sub');
-  // Grace period: don't commit to "no nginx sites" on the very first poll —
-  // shell glob/grep can return empty for transient reasons. Keep skeleton
-  // until we either see content or have polled twice empty in a row.
-  sess.monitor.attempts = sess.monitor.attempts || {};
-  sess.monitor.attempts.sites = (sess.monitor.attempts.sites || 0) + 1;
-  if (!raw.trim() && sess.monitor.attempts.sites < 2) return;
-  card.classList.remove('loading');
+  sess.monitor.seen = sess.monitor.seen || {};
+  // Stickiness: once we've ever rendered real data into this card, we never
+  // blank it back out on a transient empty poll — keep the last good
+  // render. A genuinely empty initial state shows after a short grace.
   if (!raw.trim()) {
+    if (sess.monitor.seen.sites) return;
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.sites = (sess.monitor.attempts.sites || 0) + 1;
+    if (sess.monitor.attempts.sites < 2) return;  // keep skeleton on first poll
+    card.classList.remove('loading');
     list.innerHTML = `<div class="mon-empty">no nginx sites</div>`;
     sub.textContent = '';
     return;
   }
+  sess.monitor.seen.sites = true;
+  card.classList.remove('loading');
   const sites = [];
   let cur = null;
   let mainConf = '';
@@ -2547,15 +2638,13 @@ function renderFirewall(sess, raw, code, sessionId) {
   const card = sess.monitorEl.querySelector('.mon-fw');
   const list = card.querySelector('.mon-list');
   const sub = card.querySelector('.mon-sub');
-  sess.monitor.attempts = sess.monitor.attempts || {};
-  sess.monitor.attempts.fw = (sess.monitor.attempts.fw || 0) + 1;
-  if (!raw.trim() && sess.monitor.attempts.fw < 2) return;
-  card.classList.remove('loading');
-
+  sess.monitor.seen = sess.monitor.seen || {};
   if (!raw.trim()) {
-    // No rules visible AND no sudo session yet → show clickable enable link
-    // (same affordance as the ports card). With sudo enabled, an empty
-    // result genuinely means "no rules", and we show that instead.
+    if (sess.monitor.seen.fw) return;  // keep last good render
+    sess.monitor.attempts = sess.monitor.attempts || {};
+    sess.monitor.attempts.fw = (sess.monitor.attempts.fw || 0) + 1;
+    if (sess.monitor.attempts.fw < 2) return;
+    card.classList.remove('loading');
     const sudoOn = !!sess._sudoPwd;
     list.innerHTML = sudoOn
       ? `<div class="mon-empty">no rules</div>`
@@ -2566,6 +2655,8 @@ function renderFirewall(sess, raw, code, sessionId) {
     }
     return;
   }
+  sess.monitor.seen.fw = true;
+  card.classList.remove('loading');
   const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
   let policy = '';
   const rules = [];
@@ -2720,6 +2811,14 @@ function withSudo(cmd, sessionId) {
     return `printf '%s\\n' ${q} | sudo -S -p '' ${cmd}`;
   }
   return `sudo -n ${cmd}`;
+}
+
+// Prepends sbin dirs to PATH for the wrapped command. Non-interactive SSH
+// shells often have a minimal PATH (just /usr/bin:/bin) so binaries like ss,
+// iptables, ip, nft live in /sbin or /usr/sbin and "command not found".
+// This helper makes them reachable without forcing a login shell.
+function withPath(cmd) {
+  return `PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin" ${cmd}`;
 }
 
 // One-shot sudo enrollment: prompt the user for the remote password, verify
@@ -3892,6 +3991,62 @@ async function refreshDockIcon() {
     const url = await makeDockIconDataURL();
     if (url) await window.api.dock.setIcon(url);
   } catch (e) {}
+}
+
+// ─── SSH host key verification ───
+// Renderer side of known_hosts: main process triggers this when it sees a
+// key it doesn't recognise (or one that has CHANGED, which is the scary
+// path — possible MITM). User accepts/rejects; the response goes back via
+// host.respond(id, ...).
+window.api.host.onVerify(async ({ id, host, port, fingerprint, previous, firstTime }) => {
+  const accepted = await showHostKeyDialog({ host, port, fingerprint, previous, firstTime });
+  await window.api.host.respond({ id, accept: accepted, save: accepted });
+});
+
+function showHostKeyDialog({ host, port, fingerprint, previous, firstTime }) {
+  return new Promise(resolve => {
+    const back = document.createElement('div');
+    back.className = 'modal info-modal';
+    const isChanged = !firstTime;
+    back.innerHTML = `
+      <div class="modal-body dialog-body hostkey-body${isChanged ? ' danger' : ''}">
+        <span class="corner tl"></span><span class="corner tr"></span>
+        <span class="corner bl"></span><span class="corner br"></span>
+        <div class="modal-header">${isChanged ? 'HOST KEY CHANGED' : 'NEW HOST'}</div>
+        <div class="dialog-msg hostkey-msg"></div>
+        <div class="modal-footer">
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost hostkey-cancel">${isChanged ? 'ABORT' : 'CANCEL'}</button>
+          <button class="btn ${isChanged ? 'btn-danger' : 'btn-primary'} hostkey-accept">${isChanged ? 'TRUST NEW (DANGEROUS)' : 'TRUST & SAVE'}</button>
+        </div>
+      </div>
+    `;
+    const msgEl = back.querySelector('.hostkey-msg');
+    msgEl.innerHTML = isChanged
+      ? `
+        <div class="hostkey-warn">⚠ The host key for <span class="hostkey-host">${escapeHtml(host)}:${port}</span> has CHANGED.</div>
+        <div class="hostkey-row"><span class="hostkey-label">EXPECTED</span><span class="hostkey-fp">${escapeHtml(previous || '?')}</span></div>
+        <div class="hostkey-row"><span class="hostkey-label">PRESENTED</span><span class="hostkey-fp">${escapeHtml(fingerprint)}</span></div>
+        <div class="hostkey-warn-foot">This could be a man-in-the-middle attack, OR the server's SSH key was legitimately rotated. If unsure — abort and verify out of band.</div>
+      `
+      : `
+        <div class="hostkey-host">${escapeHtml(host)}:${port}</div>
+        <div class="hostkey-row"><span class="hostkey-label">FINGERPRINT</span><span class="hostkey-fp">${escapeHtml(fingerprint)}</span></div>
+        <div class="hostkey-foot">First time connecting. Verify the fingerprint with the server admin (or via console) before trusting.</div>
+      `;
+    document.body.appendChild(back);
+    const finish = (accept) => {
+      back.remove();
+      document.removeEventListener('keydown', onEsc);
+      resolve(accept);
+    };
+    function onEsc(e) { if (e.key === 'Escape') finish(false); }
+    back.querySelector('.hostkey-accept').onclick = () => finish(true);
+    back.querySelector('.hostkey-cancel').onclick = () => finish(false);
+    back.addEventListener('click', (e) => { if (e.target === back) finish(false); });
+    document.addEventListener('keydown', onEsc);
+    setTimeout(() => back.querySelector('.hostkey-cancel').focus(), 50);  // safe default
+  });
 }
 
 // ─── Boot ───

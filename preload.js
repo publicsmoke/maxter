@@ -66,4 +66,14 @@ contextBridge.exposeInMainWorld('api', {
   dock: {
     setIcon: (dataUrl) => ipcRenderer.invoke('dock:setIcon', dataUrl),
   },
+  host: {
+    onVerify: (cb) => {
+      const handler = (_e, payload) => cb(payload);
+      ipcRenderer.on('host:verify', handler);
+      return () => ipcRenderer.removeListener('host:verify', handler);
+    },
+    respond: (opts) => ipcRenderer.invoke('host:verifyResponse', opts),
+    list: () => ipcRenderer.invoke('host:list'),
+    forget: (opts) => ipcRenderer.invoke('host:forget', opts),
+  },
 });

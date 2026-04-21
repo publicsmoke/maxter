@@ -40,6 +40,7 @@ function migrateStrayMaxterData() {
 const CONFIG_DIR = () => app.getPath('userData');
 const CONFIG_FILE = () => path.join(CONFIG_DIR(), 'servers.json');
 const AUTH_FILE = () => path.join(CONFIG_DIR(), 'auth.json');
+const HOSTS_FILE = () => path.join(CONFIG_DIR(), 'known_hosts.json');
 
 let mainWindow;
 const sessions = new Map(); // sessionId -> { conn, stream, sftp }
@@ -180,11 +181,64 @@ ipcMain.handle('auth:reset', () => {
   return true;
 });
 
+// --- Host key verification (known_hosts) ---
+//
+// We persist a {host:port → SHA-256 fingerprint} map next to the rest of the
+// userData. On every connect, ssh2's hostVerifier callback hands us the
+// presented public key:
+//   * unknown host           → ask the renderer; on accept, save fingerprint
+//   * known host, match      → silently accept
+//   * known host, mismatch   → ask renderer with a "key changed" warning
+//                              (potential MITM). User has to explicitly
+//                              accept the new key to overwrite.
+// Without this we used to accept any host key blindly — trivial MITM.
+
+function loadKnownHosts() {
+  try {
+    if (!fs.existsSync(HOSTS_FILE())) return {};
+    return JSON.parse(fs.readFileSync(HOSTS_FILE(), 'utf-8'));
+  } catch (e) { return {}; }
+}
+
+function saveKnownHosts(map) {
+  fs.mkdirSync(CONFIG_DIR(), { recursive: true });
+  fs.writeFileSync(HOSTS_FILE(), JSON.stringify(map, null, 2));
+}
+
+function fingerprintFor(buf) {
+  // SHA-256 base64, OpenSSH-style (strip trailing '=').
+  return 'SHA256:' + crypto.createHash('sha256').update(buf).digest('base64').replace(/=+$/, '');
+}
+
+let _verifyId = 0;
+const pendingVerifies = new Map();
+
+ipcMain.handle('host:verifyResponse', (_e, { id, accept, save }) => {
+  const p = pendingVerifies.get(id);
+  if (!p) return;
+  pendingVerifies.delete(id);
+  if (accept && save) {
+    const known = loadKnownHosts();
+    known[p.key] = { fingerprint: p.fp, addedAt: Date.now() };
+    saveKnownHosts(known);
+  }
+  p.cb(accept);
+});
+
+ipcMain.handle('host:list', () => loadKnownHosts());
+ipcMain.handle('host:forget', (_e, { key }) => {
+  const known = loadKnownHosts();
+  delete known[key];
+  saveKnownHosts(known);
+  return true;
+});
+
 // --- SSH session ---
 
 ipcMain.handle('ssh:connect', (_e, { sessionId, server, cols, rows }) => {
   return new Promise((resolve, reject) => {
     const conn = new Client();
+    const hostKey = `${server.host}:${server.port || 22}`;
     const cfg = {
       host: server.host,
       port: server.port || 22,
@@ -195,6 +249,32 @@ ipcMain.handle('ssh:connect', (_e, { sessionId, server, cols, rows }) => {
       // long after the network actually dropped.
       keepaliveInterval: 8000,
       keepaliveCountMax: 3,
+      // ssh2 hostVerifier — async form so we can prompt the renderer.
+      hostVerifier: (key, callback) => {
+        const buf = Buffer.isBuffer(key) ? key : Buffer.from(key);
+        const fp = fingerprintFor(buf);
+        const known = loadKnownHosts();
+        const stored = known[hostKey];
+        if (stored && stored.fingerprint === fp) return callback(true);
+        // Prompt the renderer. The verify response IPC resolves p.cb.
+        const id = ++_verifyId;
+        pendingVerifies.set(id, { cb: callback, fp, key: hostKey });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('host:verify', {
+            id,
+            host: server.host,
+            port: server.port || 22,
+            fingerprint: fp,
+            previous: stored ? stored.fingerprint : null,
+            firstTime: !stored,
+          });
+        } else {
+          // No window to ask — refuse to silently auto-trust on first
+          // connect, that's the whole point of the verifier.
+          pendingVerifies.delete(id);
+          callback(false);
+        }
+      },
     };
 
     if (server.authMethod === 'key' && server.privateKey) {

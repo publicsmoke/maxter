@@ -2097,6 +2097,70 @@ body.sidebar-hidden #sidebarToggle { margin-left: 0; }
   margin: 4px 0;
 }
 
+/* ─── Host-key verification dialog ─── */
+.hostkey-body { width: 560px; max-width: 92vw; }
+.hostkey-body.danger { border-color: var(--alert); }
+.hostkey-body.danger .modal-header { color: var(--alert); }
+.hostkey-msg { margin-bottom: 14px; }
+.hostkey-host {
+  font-family: var(--family-mono);
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 12px;
+  letter-spacing: 0.5px;
+}
+.hostkey-row {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--family-mono);
+  font-size: 11px;
+}
+.hostkey-row:last-of-type { border-bottom: none; margin-bottom: 8px; }
+.hostkey-label {
+  color: var(--text-3);
+  letter-spacing: 2px;
+  font-size: 9px;
+}
+.hostkey-fp {
+  color: var(--accent-hot);
+  word-break: break-all;
+  user-select: text;
+}
+.hostkey-foot {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+.hostkey-warn {
+  color: var(--alert);
+  font-family: var(--family-mono);
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.hostkey-warn-foot {
+  font-family: var(--family-mono);
+  font-size: 10px;
+  color: var(--text-2);
+  letter-spacing: 0.4px;
+  line-height: 1.5;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--alert);
+  background: color-mix(in srgb, var(--alert) 6%, transparent);
+}
+
 /* ─── Overwrite dialog ─── */
 .ovr-body { width: 520px; max-width: 92vw; }
 .ovr-msg { margin-bottom: 14px; }
