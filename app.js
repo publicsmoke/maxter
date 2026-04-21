@@ -22,10 +22,12 @@ const THEMES = [
       background: '#08080c', foreground: '#d0d0d5',
       cursor: '#9cb3d4', cursorAccent: '#08080c',
       selectionBackground: '#2a3548',
-      black: '#0a0a0d', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
-      blue: '#6695c4', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
-      brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#98c379', brightYellow: '#e5c07b',
-      brightBlue: '#9cb3d4', brightMagenta: '#c678dd', brightCyan: '#56b6c2', brightWhite: '#ffffff',
+      // green/brightGreen = accent so remote bash PS1 (\e[1;32m) lands in
+      // the theme's hero colour, matching the connect indicator.
+      black: '#0a0a0d', red: '#e06c75', green: '#6695c4', yellow: '#e5c07b',
+      blue: '#6695c4', magenta: '#c678dd', cyan: '#6695c4', white: '#abb2bf',
+      brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#9cb3d4', brightYellow: '#e5c07b',
+      brightBlue: '#9cb3d4', brightMagenta: '#c678dd', brightCyan: '#9cb3d4', brightWhite: '#ffffff',
     },
   },
   {
@@ -34,10 +36,12 @@ const THEMES = [
       background: '#ffffff', foreground: '#1a1a1f',
       cursor: '#0066cc', cursorAccent: '#ffffff',
       selectionBackground: '#cde0f6',
-      black: '#0a0a0f', red: '#c0392b', green: '#0f8a3a', yellow: '#b07400',
-      blue: '#0066cc', magenta: '#8e44ad', cyan: '#0f8f7f', white: '#666670',
-      brightBlack: '#333340', brightRed: '#e74c3c', brightGreen: '#14a84a', brightYellow: '#d99600',
-      brightBlue: '#3498db', brightMagenta: '#9b59b6', brightCyan: '#16a085', brightWhite: '#0a0a0f',
+      // green/brightGreen = accent so remote bash PS1 renders in polar blue,
+      // matching the connect dot.
+      black: '#0a0a0f', red: '#c0392b', green: '#0066cc', yellow: '#b07400',
+      blue: '#0066cc', magenta: '#8e44ad', cyan: '#0066cc', white: '#666670',
+      brightBlack: '#333340', brightRed: '#e74c3c', brightGreen: '#3498db', brightYellow: '#d99600',
+      brightBlue: '#3498db', brightMagenta: '#9b59b6', brightCyan: '#3498db', brightWhite: '#0a0a0f',
     },
   },
   {
@@ -46,9 +50,9 @@ const THEMES = [
       background: '#0a0014', foreground: '#f0d8ff',
       cursor: '#ff2d95', cursorAccent: '#0a0014',
       selectionBackground: '#3a1a5e',
-      black: '#22143b', red: '#ff2d95', green: '#00ff88', yellow: '#ffaa00',
+      black: '#22143b', red: '#ff2d95', green: '#ff2d95', yellow: '#ffaa00',
       blue: '#00eeff', magenta: '#d050ff', cyan: '#00eeff', white: '#f0d8ff',
-      brightBlack: '#7a4f9a', brightRed: '#ff66cc', brightGreen: '#66ffbb', brightYellow: '#ffcc44',
+      brightBlack: '#7a4f9a', brightRed: '#ff66cc', brightGreen: '#ff66cc', brightYellow: '#ffcc44',
       brightBlue: '#66ffff', brightMagenta: '#e888ff', brightCyan: '#88ffff', brightWhite: '#ffffff',
     },
   },
@@ -58,10 +62,11 @@ const THEMES = [
       background: '#140806', foreground: '#f0dcd0',
       cursor: '#ff6a3d', cursorAccent: '#140806',
       selectionBackground: '#4a2820',
-      black: '#281010', red: '#ff4040', green: '#d4b572', yellow: '#ffaa44',
-      blue: '#c98460', magenta: '#d67575', cyan: '#c0a078', white: '#f0dcd0',
-      brightBlack: '#7a5c4a', brightRed: '#ff6666', brightGreen: '#e8cc88', brightYellow: '#ffcc66',
-      brightBlue: '#e8a078', brightMagenta: '#f09595', brightCyan: '#e0c088', brightWhite: '#ffffff',
+      // green + cyan = accent so bash PS1 + banner stay rust.
+      black: '#281010', red: '#ff4040', green: '#ff6a3d', yellow: '#ffaa44',
+      blue: '#c98460', magenta: '#d67575', cyan: '#ff6a3d', white: '#f0dcd0',
+      brightBlack: '#7a5c4a', brightRed: '#ff6666', brightGreen: '#ff8d62', brightYellow: '#ffcc66',
+      brightBlue: '#e8a078', brightMagenta: '#f09595', brightCyan: '#ff8d62', brightWhite: '#ffffff',
     },
   },
   {
@@ -82,10 +87,10 @@ const THEMES = [
       background: '#1a1e27', foreground: '#eceff4',
       cursor: '#88c0d0', cursorAccent: '#1a1e27',
       selectionBackground: '#434c5e',
-      black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+      black: '#3b4252', red: '#bf616a', green: '#88c0d0', yellow: '#ebcb8b',
       blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
-      brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c', brightYellow: '#ebcb8b',
-      brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#8fbcbb', brightWhite: '#eceff4',
+      brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#b9d5e8', brightYellow: '#ebcb8b',
+      brightBlue: '#81a1c1', brightMagenta: '#b48ead', brightCyan: '#b9d5e8', brightWhite: '#eceff4',
     },
   },
   {
@@ -94,10 +99,13 @@ const THEMES = [
       background: '#fdf6e3', foreground: '#3a2a1a',
       cursor: '#cb4b16', cursorAccent: '#fdf6e3',
       selectionBackground: '#eee8d5',
-      black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
-      blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
-      brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#93a1a1', brightYellow: '#657b83',
-      brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#2aa198', brightWhite: '#3a2a1a',
+      // Classic solarized keeps ANSI blue/cyan (Ethan Schoonover's spec) —
+      // but here we pull cyan to the warm accent so our banner matches
+      // solar's burnt-orange identity. Blue stays as the cool solar accent.
+      black: '#073642', red: '#dc322f', green: '#cb4b16', yellow: '#b58900',
+      blue: '#268bd2', magenta: '#d33682', cyan: '#cb4b16', white: '#eee8d5',
+      brightBlack: '#586e75', brightRed: '#dc322f', brightGreen: '#d97706', brightYellow: '#b58900',
+      brightBlue: '#268bd2', brightMagenta: '#6c71c4', brightCyan: '#d97706', brightWhite: '#3a2a1a',
     },
   },
   {
@@ -118,10 +126,11 @@ const THEMES = [
       background: '#282a36', foreground: '#f8f8f2',
       cursor: '#f8f8f2', cursorAccent: '#282a36',
       selectionBackground: '#44475a',
-      black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
-      blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
-      brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94', brightYellow: '#ffffa5',
-      brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#a4ffff', brightWhite: '#ffffff',
+      // All pink/purple — bash PS1 and banner land on the dracula pink.
+      black: '#21222c', red: '#ff5555', green: '#ff79c6', yellow: '#f1fa8c',
+      blue: '#bd93f9', magenta: '#ff79c6', cyan: '#ff79c6', white: '#f8f8f2',
+      brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#ff92df', brightYellow: '#ffffa5',
+      brightBlue: '#d6acff', brightMagenta: '#ff92df', brightCyan: '#ff92df', brightWhite: '#ffffff',
     },
   },
   {
@@ -130,9 +139,9 @@ const THEMES = [
       background: '#1a1b26', foreground: '#c0caf5',
       cursor: '#7aa2f7', cursorAccent: '#1a1b26',
       selectionBackground: '#283457',
-      black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+      black: '#15161e', red: '#f7768e', green: '#7aa2f7', yellow: '#e0af68',
       blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
-      brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a', brightYellow: '#e0af68',
+      brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#bb9af7', brightYellow: '#e0af68',
       brightBlue: '#7aa2f7', brightMagenta: '#bb9af7', brightCyan: '#7dcfff', brightWhite: '#c0caf5',
     },
   },
@@ -142,9 +151,9 @@ const THEMES = [
       background: '#130a3e', foreground: '#ffdcf7',
       cursor: '#ff00c8', cursorAccent: '#130a3e',
       selectionBackground: '#3a1a6e',
-      black: '#241650', red: '#ff0059', green: '#00f2a8', yellow: '#ffa500',
+      black: '#241650', red: '#ff0059', green: '#ff00c8', yellow: '#ffa500',
       blue: '#00f2ff', magenta: '#ff00c8', cyan: '#00f2ff', white: '#ffdcf7',
-      brightBlack: '#6b588a', brightRed: '#ff3377', brightGreen: '#44ffbb', brightYellow: '#ffcc44',
+      brightBlack: '#6b588a', brightRed: '#ff3377', brightGreen: '#ff66dd', brightYellow: '#ffcc44',
       brightBlue: '#66fbff', brightMagenta: '#ff66dd', brightCyan: '#88ffff', brightWhite: '#ffffff',
     },
   },
@@ -154,10 +163,12 @@ const THEMES = [
       background: '#0a0600', foreground: '#ffb000',
       cursor: '#ffb000', cursorAccent: '#0a0600',
       selectionBackground: '#4a3000',
-      black: '#0a0600', red: '#ff4040', green: '#ffb000', yellow: '#ffd454',
-      blue: '#c08400', magenta: '#ffb000', cyan: '#ffd454', white: '#ffb000',
-      brightBlack: '#6e4a00', brightRed: '#ff6666', brightGreen: '#ffd454', brightYellow: '#fff099',
-      brightBlue: '#ffd454', brightMagenta: '#ffd454', brightCyan: '#ffe8bb', brightWhite: '#ffd454',
+      // Pure amber CRT monochrome — every ANSI color is an amber tint.
+      // cyan = amber accent for the banner.
+      black: '#0a0600', red: '#ff5544', green: '#ffc044', yellow: '#ffd454',
+      blue: '#c08400', magenta: '#ff8833', cyan: '#ffb000', white: '#ffb000',
+      brightBlack: '#6e4a00', brightRed: '#ff7755', brightGreen: '#ffd470', brightYellow: '#fff099',
+      brightBlue: '#dd9900', brightMagenta: '#ffaa44', brightCyan: '#ffd454', brightWhite: '#ffe8bb',
     },
   },
   {
@@ -166,10 +177,11 @@ const THEMES = [
       background: '#272822', foreground: '#f8f8f2',
       cursor: '#f92672', cursorAccent: '#272822',
       selectionBackground: '#49483e',
-      black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75',
-      blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2',
-      brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#a6e22e', brightYellow: '#fd971f',
-      brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#a1efe4', brightWhite: '#f9f8f5',
+      // Pink everywhere — prompt and banner land on the monokai hot-pink.
+      black: '#272822', red: '#f92672', green: '#f92672', yellow: '#f4bf75',
+      blue: '#66d9ef', magenta: '#ae81ff', cyan: '#f92672', white: '#f8f8f2',
+      brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#ff4488', brightYellow: '#fd971f',
+      brightBlue: '#66d9ef', brightMagenta: '#ae81ff', brightCyan: '#ff4488', brightWhite: '#f9f8f5',
     },
   },
   {
@@ -178,10 +190,11 @@ const THEMES = [
       background: '#282828', foreground: '#ebdbb2',
       cursor: '#fe8019', cursorAccent: '#282828',
       selectionBackground: '#504945',
-      black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921',
-      blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
-      brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26', brightYellow: '#fabd2f',
-      brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#8ec07c', brightWhite: '#ebdbb2',
+      // Burnt orange hero — green + cyan go to it so PS1 matches.
+      black: '#282828', red: '#cc241d', green: '#fe8019', yellow: '#d79921',
+      blue: '#458588', magenta: '#b16286', cyan: '#fe8019', white: '#a89984',
+      brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#fabd2f', brightYellow: '#fabd2f',
+      brightBlue: '#83a598', brightMagenta: '#d3869b', brightCyan: '#fabd2f', brightWhite: '#ebdbb2',
     },
   },
   {
@@ -190,10 +203,12 @@ const THEMES = [
       background: '#1e1e2e', foreground: '#cdd6f4',
       cursor: '#f5e0dc', cursorAccent: '#1e1e2e',
       selectionBackground: '#45475a',
-      black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
-      blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
-      brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1', brightYellow: '#f9e2af',
-      brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#94e2d5', brightWhite: '#a6adc8',
+      // Pink-centric catppuccin. green pulled into rose-pink so ls /
+      // bash PS1 blend with the theme. Keep blue for diff info.
+      black: '#45475a', red: '#f38ba8', green: '#f5c2e7', yellow: '#f9e2af',
+      blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#f5c2e7', white: '#bac2de',
+      brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#ffccee', brightYellow: '#f9e2af',
+      brightBlue: '#89b4fa', brightMagenta: '#f5c2e7', brightCyan: '#ffccee', brightWhite: '#a6adc8',
     },
   },
   {
@@ -202,9 +217,9 @@ const THEMES = [
       background: '#050000', foreground: '#ff8080',
       cursor: '#ff0000', cursorAccent: '#050000',
       selectionBackground: '#4a0000',
-      black: '#1e0808', red: '#ff0000', green: '#ff6b6b', yellow: '#ffaa00',
+      black: '#1e0808', red: '#ff0000', green: '#ff0000', yellow: '#ffaa00',
       blue: '#ff4444', magenta: '#ff2222', cyan: '#ff8080', white: '#ff8080',
-      brightBlack: '#6d2b2b', brightRed: '#ff6666', brightGreen: '#ff9999', brightYellow: '#ffcc44',
+      brightBlack: '#6d2b2b', brightRed: '#ff6666', brightGreen: '#ff4444', brightYellow: '#ffcc44',
       brightBlue: '#ff6666', brightMagenta: '#ff4444', brightCyan: '#ffaaaa', brightWhite: '#ffffff',
     },
   },
@@ -214,9 +229,9 @@ const THEMES = [
       background: '#03131f', foreground: '#d0e3f7',
       cursor: '#4a9eff', cursorAccent: '#03131f',
       selectionBackground: '#1e3a5c',
-      black: '#0a2540', red: '#ef5350', green: '#4adeaa', yellow: '#ffa726',
+      black: '#0a2540', red: '#ef5350', green: '#4a9eff', yellow: '#ffa726',
       blue: '#4a9eff', magenta: '#9575cd', cyan: '#4dd0e1', white: '#d0e3f7',
-      brightBlack: '#3e566e', brightRed: '#ff8888', brightGreen: '#7cffcc', brightYellow: '#ffc472',
+      brightBlack: '#3e566e', brightRed: '#ff8888', brightGreen: '#7dc3ff', brightYellow: '#ffc472',
       brightBlue: '#7dc3ff', brightMagenta: '#b39ddb', brightCyan: '#80deea', brightWhite: '#ffffff',
     },
   },
@@ -226,10 +241,11 @@ const THEMES = [
       background: '#250f1a', foreground: '#ffdcc5',
       cursor: '#ff6b9d', cursorAccent: '#250f1a',
       selectionBackground: '#552838',
-      black: '#3a1c28', red: '#ff5555', green: '#ffc571', yellow: '#ff9a5c',
-      blue: '#c49882', magenta: '#ff6b9d', cyan: '#ffb88c', white: '#ffdcc5',
-      brightBlack: '#7a5649', brightRed: '#ff7e7e', brightGreen: '#ffd699', brightYellow: '#ffb480',
-      brightBlue: '#ddb09c', brightMagenta: '#ff8fb4', brightCyan: '#ffcea8', brightWhite: '#fff2e3',
+      // Pink hero. green + cyan on pink accent so PS1 lands on-theme.
+      black: '#3a1c28', red: '#ff5555', green: '#ff6b9d', yellow: '#ff9a5c',
+      blue: '#c88197', magenta: '#ff6b9d', cyan: '#ff6b9d', white: '#ffdcc5',
+      brightBlack: '#7a5649', brightRed: '#ff7e7e', brightGreen: '#ff8fb4', brightYellow: '#ffb480',
+      brightBlue: '#ff9ab7', brightMagenta: '#ff8fb4', brightCyan: '#ff8fb4', brightWhite: '#fff2e3',
     },
   },
   {
@@ -238,9 +254,9 @@ const THEMES = [
       background: '#161618', foreground: '#f4f4f4',
       cursor: '#0f62fe', cursorAccent: '#161618',
       selectionBackground: '#393939',
-      black: '#161618', red: '#fa4d56', green: '#42be65', yellow: '#f1c21b',
+      black: '#161618', red: '#fa4d56', green: '#0f62fe', yellow: '#f1c21b',
       blue: '#0f62fe', magenta: '#a56eff', cyan: '#1192e8', white: '#c6c6c6',
-      brightBlack: '#6f6f6f', brightRed: '#ff7070', brightGreen: '#6fdc8c', brightYellow: '#ffd03b',
+      brightBlack: '#6f6f6f', brightRed: '#ff7070', brightGreen: '#4589ff', brightYellow: '#ffd03b',
       brightBlue: '#4589ff', brightMagenta: '#be95ff', brightCyan: '#33b1ff', brightWhite: '#ffffff',
     },
   },
@@ -250,10 +266,13 @@ const THEMES = [
       background: '#ffffff', foreground: '#1a1a1a',
       cursor: '#1a1a1a', cursorAccent: '#ffffff',
       selectionBackground: '#dcdcdc',
-      black: '#0a0a0a', red: '#c62828', green: '#2e7d32', yellow: '#ef6c00',
-      blue: '#1565c0', magenta: '#6a1b9a', cyan: '#00838f', white: '#525252',
-      brightBlack: '#333333', brightRed: '#d32f2f', brightGreen: '#388e3c', brightYellow: '#f57c00',
-      brightBlue: '#1976d2', brightMagenta: '#7b1fa2', brightCyan: '#0097a7', brightWhite: '#1a1a1a',
+      // Monochrome print aesthetic — all ANSI colours are greys, only red
+      // stays coloured so errors still read as errors. Matches the black
+      // swatch in the theme picker and the "black ink on white paper" idea.
+      black: '#0a0a0a', red: '#c62828', green: '#444444', yellow: '#666666',
+      blue: '#2a2a2a', magenta: '#3a3a3a', cyan: '#1a1a1a', white: '#525252',
+      brightBlack: '#333333', brightRed: '#d32f2f', brightGreen: '#5a5a5a', brightYellow: '#7a7a7a',
+      brightBlue: '#3a3a3a', brightMagenta: '#4a4a4a', brightCyan: '#2a2a2a', brightWhite: '#1a1a1a',
     },
   },
   {
@@ -262,10 +281,10 @@ const THEMES = [
       background: '#fbfbfc', foreground: '#1f2428',
       cursor: '#5e6ad2', cursorAccent: '#fbfbfc',
       selectionBackground: '#d0d4ed',
-      black: '#1f2428', red: '#eb5757', green: '#4cb782', yellow: '#f2994a',
-      blue: '#5e6ad2', magenta: '#9d5bd2', cyan: '#4bb4e6', white: '#555a65',
-      brightBlack: '#8a919e', brightRed: '#f06969', brightGreen: '#5ec893', brightYellow: '#ffa968',
-      brightBlue: '#7b88ea', brightMagenta: '#b070e0', brightCyan: '#6cc0f0', brightWhite: '#1f2428',
+      black: '#1f2428', red: '#eb5757', green: '#5e6ad2', yellow: '#f2994a',
+      blue: '#5e6ad2', magenta: '#9d5bd2', cyan: '#5e6ad2', white: '#555a65',
+      brightBlack: '#8a919e', brightRed: '#f06969', brightGreen: '#7b88ea', brightYellow: '#ffa968',
+      brightBlue: '#7b88ea', brightMagenta: '#b070e0', brightCyan: '#7b88ea', brightWhite: '#1f2428',
     },
   },
   {
@@ -274,10 +293,11 @@ const THEMES = [
       background: '#fbf1c7', foreground: '#3c3836',
       cursor: '#af3a03', cursorAccent: '#fbf1c7',
       selectionBackground: '#ebdbb2',
-      black: '#3c3836', red: '#9d0006', green: '#79740e', yellow: '#b57614',
-      blue: '#076678', magenta: '#8f3f71', cyan: '#427b58', white: '#928374',
-      brightBlack: '#7c6f64', brightRed: '#cc241d', brightGreen: '#98971a', brightYellow: '#d79921',
-      brightBlue: '#458588', brightMagenta: '#b16286', brightCyan: '#689d6a', brightWhite: '#3c3836',
+      // Burnt-orange hero. green + cyan = hero so PS1 matches connect dot.
+      black: '#3c3836', red: '#9d0006', green: '#af3a03', yellow: '#b57614',
+      blue: '#076678', magenta: '#8f3f71', cyan: '#af3a03', white: '#928374',
+      brightBlack: '#7c6f64', brightRed: '#cc241d', brightGreen: '#d65d0e', brightYellow: '#d79921',
+      brightBlue: '#458588', brightMagenta: '#b16286', brightCyan: '#d65d0e', brightWhite: '#3c3836',
     },
   },
   {
@@ -286,10 +306,11 @@ const THEMES = [
       background: '#fff5f8', foreground: '#4a2c3a',
       cursor: '#e85d75', cursorAccent: '#fff5f8',
       selectionBackground: '#ffcdd8',
-      black: '#4a2c3a', red: '#c62828', green: '#6a9955', yellow: '#d19a66',
-      blue: '#6b5b95', magenta: '#e85d75', cyan: '#7a9fa0', white: '#7c5064',
-      brightBlack: '#b08090', brightRed: '#e04545', brightGreen: '#85b46a', brightYellow: '#e8b080',
-      brightBlue: '#8777b5', brightMagenta: '#f57e95', brightCyan: '#98b8b9', brightWhite: '#4a2c3a',
+      // All pink — PS1 + banner land on the sakura hero.
+      black: '#4a2c3a', red: '#c62828', green: '#e85d75', yellow: '#d19a66',
+      blue: '#b06590', magenta: '#e85d75', cyan: '#e85d75', white: '#7c5064',
+      brightBlack: '#b08090', brightRed: '#e04545', brightGreen: '#ff8fa3', brightYellow: '#e8b080',
+      brightBlue: '#d080a8', brightMagenta: '#f57e95', brightCyan: '#ff9ab0', brightWhite: '#4a2c3a',
     },
   },
   {
@@ -298,10 +319,12 @@ const THEMES = [
       background: '#f0fdf9', foreground: '#0f3d2e',
       cursor: '#10b981', cursorAccent: '#f0fdf9',
       selectionBackground: '#c8ead5',
-      black: '#0f3d2e', red: '#dc2626', green: '#059669', yellow: '#d97706',
-      blue: '#0891b2', magenta: '#9333ea', cyan: '#0e7490', white: '#2d6b50',
-      brightBlack: '#6b9080', brightRed: '#ef4444', brightGreen: '#10b981', brightYellow: '#f59e0b',
-      brightBlue: '#06b6d4', brightMagenta: '#a855f7', brightCyan: '#0ea5e9', brightWhite: '#0f3d2e',
+      // Whole palette stays in the green/teal family so the banner (cyan)
+      // and anything using ANSI blue reads as mint, not out-of-theme sky blue.
+      black: '#0f3d2e', red: '#dc2626', green: '#059669', yellow: '#ca8a04',
+      blue: '#047857', magenta: '#7c3aed', cyan: '#10b981', white: '#2d6b50',
+      brightBlack: '#6b9080', brightRed: '#ef4444', brightGreen: '#22c55e', brightYellow: '#d97706',
+      brightBlue: '#059669', brightMagenta: '#a78bfa', brightCyan: '#34d399', brightWhite: '#0f3d2e',
     },
   },
 ];
@@ -1020,8 +1043,11 @@ function renderTabs() {
     el.innerHTML = `
       ${seqMarkup}
       <span class="tab-name">${escapeHtml(s.server.name || s.server.host)}</span>
-      <span class="tab-sub">${escapeHtml(s.server.host)}</span>
-      <button class="tab-close" title="Disconnect">×</button>
+      <button class="tab-close" title="Disconnect" aria-label="Disconnect">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+          <path d="M2 2l6 6M8 2l-6 6"/>
+        </svg>
+      </button>
     `;
     el.addEventListener('click', () => setActiveTab(id));
     el.querySelector('.tab-close').addEventListener('click', e => {
@@ -2139,14 +2165,15 @@ async function pollSlow(sessionId) {
         withPath(`${tcp} 2>/dev/null; echo '___UDP___'; ${udp} 2>/dev/null`),
         6000);
     })(),
-    // nginx sites: walk both classic Debian layout AND conf.d via `find`
-    // (more reliable than glob — handles missing dirs, permission gaps).
-    // For each file emit `=== <full-path>` so renderer can open editor on
-    // click, then the server_name + listen lines. Also probe nginx.conf
-    // itself — minimal setups put server blocks directly there instead of
-    // splitting into separate site files.
+    // nginx sites: walk both classic Debian layout AND conf.d via `find -L`
+    // (-L follows symlinks — Debian links sites-available/X into
+    // sites-enabled/X, and without -L find -type f skips those symlinks
+    // and we'd wrongly show "no sites"). Emit `=== <full-path>` for each
+    // file so renderer opens editor on click, then the server_name +
+    // listen lines. Also probe nginx.conf directly — minimal setups put
+    // server blocks there instead of splitting.
     execOut(sessionId,
-      "find /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 1 -type f 2>/dev/null | while read f; do " +
+      "find -L /etc/nginx/sites-enabled /etc/nginx/conf.d -maxdepth 1 -type f 2>/dev/null | while read f; do " +
       "echo \"=== $f\"; " +
       "grep -hE '^[[:space:]]*(server_name|listen)[[:space:]]' \"$f\" 2>/dev/null | sed 's/^[[:space:]]*//; s/;.*//'; " +
       "done; " +
